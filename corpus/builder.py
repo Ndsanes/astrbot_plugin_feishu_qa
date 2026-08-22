@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .parser import ParseResult
 
@@ -35,7 +35,7 @@ def build_manifest(
         "schema_version": 1,
         "revision_id": revision_id,
         "document_id": document_id,
-        "built_at": (built_at or datetime.now(timezone.utc)).isoformat(),
+        "built_at": (built_at or datetime.now(UTC)).isoformat(),
         "entry_count": len(parsed.entries),
         "image_count": sum(len(e["images"]) for e in entries),
         "content_hash": content_hash,

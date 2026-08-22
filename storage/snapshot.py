@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import shutil
-from dataclasses import asdict
 from pathlib import Path
 
 logger = logging.getLogger("feishu_qa.storage")
