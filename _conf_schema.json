@@ -1,0 +1,70 @@
+{
+  "WIKI_URL": {
+    "description": "飞书 Q&A 文档链接(wiki 或 docx URL)",
+    "type": "string",
+    "hint": "例如 https://my.feishu.cn/wiki/xxxx",
+    "default": "",
+    "obvious_hint": true
+  },
+  "ENABLED_GROUPS": {
+    "description": "启用问答的群聊列表",
+    "type": "list",
+    "hint": "填群 ID;留空 = 不在任何群启用;填 * 表示全部群",
+    "default": [],
+    "obvious_hint": true
+  },
+  "ADMIN_USERS": {
+    "description": "管理员用户 ID 列表",
+    "type": "list",
+    "hint": "可使用 /qa_sync /qa_reload /learn 等管理指令",
+    "default": []
+  },
+  "SYNC_INTERVAL_HOURS": {
+    "description": "自动同步间隔(小时)",
+    "type": "int",
+    "hint": "0 = 关闭自动同步",
+    "default": 12
+  },
+  "AUTH_CHECK_HOURS": {
+    "description": "登录态健康检查间隔(小时)",
+    "type": "int",
+    "hint": "0 = 关闭检查",
+    "default": 12
+  },
+  "AUTH_WARNING_HOURS": {
+    "description": "登录态剩余多久视为即将过期",
+    "type": "int",
+    "default": 48
+  },
+  "ATTACH_IMAGES": {
+    "description": "回答时附带文档截图",
+    "type": "bool",
+    "default": true
+  },
+  "MAX_IMAGES": {
+    "description": "单条回答最多附图数量",
+    "type": "int",
+    "default": 3
+  },
+  "HIGH_CONFIDENCE_THRESHOLD": {
+    "description": "直答置信阈值(高于此分直接回原文,不调用 LLM)",
+    "type": "float",
+    "hint": "默认经真实语料校准,一般无需修改",
+    "default": 9.0
+  },
+  "MEDIUM_CONFIDENCE_THRESHOLD": {
+    "description": "中置信阈值(介于两者之间交给主 Agent)",
+    "type": "float",
+    "default": 3.0
+  },
+  "ENABLE_LLM_TOOL": {
+    "description": "注册 search_feishu_qa 工具给主 Agent",
+    "type": "bool",
+    "default": true
+  },
+  "LEARN_CONTEXT_MESSAGES": {
+    "description": "/learn 分析的最近消息条数上限",
+    "type": "int",
+    "default": 50
+  }
+}
