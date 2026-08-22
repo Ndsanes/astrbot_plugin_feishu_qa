@@ -99,11 +99,11 @@ async def main() -> int:
     store = SnapshotStore(data_root)
 
     if not args.skip_images and adapter is not None:
-        with tempfile.TemporaryDirectory() as td:
-            staged = await download_images(adapter, manifest, store.images_dir)
+        with tempfile.TemporaryDirectory():
+            await download_images(adapter, manifest, store.images_dir)
         # staged 已直接落在正式 images 目录,无需再搬移
     else:
-        staged = {}
+        pass
 
     old = store.load()
     from astrbot_plugin_feishu_qa.corpus.builder import diff_manifests
