@@ -25,6 +25,13 @@ try:
     from astrbot_plugin_feishu_qa.corpus.builder import build_manifest, diff_manifests
     from astrbot_plugin_feishu_qa.corpus.parser import parse_xml
     from astrbot_plugin_feishu_qa.retrieval.scorer import Retriever
+    from astrbot_plugin_feishu_qa.learn.candidate import (
+        build_learn_prompt,
+        candidate_to_pending_record,
+        find_duplicate,
+        format_candidate_display,
+        parse_candidate,
+    )
     from astrbot_plugin_feishu_qa.storage.snapshot import SnapshotStore
 except ImportError:  # pragma: no cover - 直接以目录加载时的兜底
     from adapter.auth import AuthKeeper  # type: ignore
@@ -60,6 +67,7 @@ class FeishuQaPlugin(Star):
         self._router: AnswerRouter | None = None
         self._load_corpus()
 
+        self._pending_learn: dict[str, dict] = {}  # user_id -> candidate
         self._sync_task: asyncio.Task | None = None
         self._auth_task: asyncio.Task | None = None
 
@@ -316,6 +324,124 @@ class FeishuQaPlugin(Star):
             return
         ok = self._load_corpus()
         yield event.plain_result("语料已重新加载" if ok else "语料加载失败")
+
+    @filter.command("learn")
+    async def learn(self, event: AstrMessageEvent):
+        """/learn:分析最近群聊,提取候选 QA(管理员;确认后才生效)。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可用")
+            return
+
+        text = self._strip_command(event.message_str)
+        user_id = str(event.get_sender_id())
+
+        if text.lower() in ("ok", "确认", "yes"):
+            pending = self._pending_learn.pop(user_id, None)
+            if not pending:
+                yield event.plain_result("当前没有待确认的候选。先运行 /learn 分析群聊。")
+                return
+            record = candidate_to_pending_record(
+                pending,
+                group_id=event.get_group_id() or "",
+                approved_by=user_id,
+            )
+            pending_path = self.data_root / "pending_learn.json"
+            records = []
+            if pending_path.is_file():
+                try:
+                    records = json.loads(pending_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    records = []
+            records.append(record)
+            pending_path.write_text(
+                json.dumps(records, ensure_ascii=False, indent=1)
+            )
+            yield event.plain_result(
+                "已收录为待写入候选(写入飞书文档将在下个版本开放,"
+                "当前由管理员人工同步)。"
+            )
+            return
+
+        if text.lower() in ("no", "取消", "放弃"):
+            dropped = self._pending_learn.pop(user_id, None)
+            yield event.plain_result("已放弃。" if dropped else "没有待确认的候选。")
+            return
+
+        # 1) 取最近群聊历史(aiocqhttp 专属能力,失败即告知)
+        history_texts = await self._fetch_recent_history(event)
+        if history_texts is None:
+            yield event.plain_result(
+                "当前平台不支持读取群历史消息,/learn 仅在 aiocqhttp 下可用。"
+            )
+            return
+        if not history_texts:
+            yield event.plain_result("最近没有可分析的消息。")
+            return
+
+        # 2) LLM 提取(唯一一次调用,spec §39)
+        prompt = build_learn_prompt(history_texts)
+        try:
+            provider_id = await self.context.get_current_chat_provider_id(
+                umo=event.unified_msg_origin
+            )
+            resp = await self.context.llm_generate(
+                chat_provider_id=provider_id, prompt=prompt
+            )
+            raw = resp.completion_text
+        except Exception as exc:
+            yield event.plain_result(f"LLM 调用失败: {exc}")
+            return
+
+        # 3) 严格解析 + 查重
+        candidate = parse_candidate(raw or "")
+        if candidate is None:
+            yield event.plain_result("最近的群聊中没有值得加入 FAQ 的新问答。")
+            return
+
+        duplicate = find_duplicate(candidate, self._retriever) if self._retriever else None
+        if duplicate is not None:
+            yield event.plain_result(
+                f"与既有条目高度相似,不新增:\n【{duplicate.raw_title}】\n"
+                f"如需更新该条目内容,请直接编辑飞书文档。"
+            )
+            return
+
+        self._pending_learn[user_id] = candidate
+        yield event.plain_result(format_candidate_display(candidate))
+
+    async def _fetch_recent_history(self, event: AstrMessageEvent) -> list[str] | None:
+        """读最近 N 条群消息文本;平台不支持返回 None。"""
+        limit = int(self._cfg("LEARN_CONTEXT_MESSAGES", 50))
+        try:
+            bot = getattr(event, "bot", None)
+            if bot is None:
+                client = self._get_aiocqhttp_client(event)
+            else:
+                client = bot
+            if client is None:
+                return None
+            result = await client.api.call_action(
+                "get_group_msg_history",
+                group_id=int(event.get_group_id()),
+                count=limit,
+            )
+            messages = result.get("messages", [])
+            texts = [
+                str(m.get("message", "")).strip()
+                for m in messages
+                if isinstance(m, dict) and m.get("message")
+            ]
+            return [t for t in texts if t][-limit:]
+        except Exception as exc:
+            logger.debug("[FeishuQA] 读取群历史失败: %s", exc)
+            return None
+
+    def _get_aiocqhttp_client(self, event: AstrMessageEvent):
+        try:
+            platform = self.context.get_platform(filter.PlatformAdapterType.AIOCQHTTP)
+            return getattr(platform, "client", None)
+        except Exception:
+            return None
 
     # ── 发送辅助 ──
 
