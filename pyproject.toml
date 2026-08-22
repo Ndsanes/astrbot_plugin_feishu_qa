@@ -1,0 +1,18 @@
+[project]
+name = "astrbot-plugin-workspace"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".reference", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["SIM108"]
+
+[tool.pytest.ini_options]
+testpaths = ["astrbot_lark_kit/tests", "astrbot_plugin_feishu_qa/tests"]
+asyncio_mode = "auto"
+pythonpath = ["."]
