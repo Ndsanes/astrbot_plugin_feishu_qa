@@ -1,0 +1,31 @@
+{
+  "description": "20 条真实用户措辞的检索评测集(spec §54)。expect_title_substr: top1 标题须包含其中之一。",
+  "queries": [
+    {"query": "cakewalk 没有自带的模板怎么办", "expect_title_substr": ["没有自带模板"]},
+    {"query": "自带音源扫描不到 只有一个xsampler", "expect_title_substr": ["搜索不到自带音源", "Ample音源扫描不到"]},
+    {"query": "安装cakewalk的时候路径改不了", "expect_title_substr": ["安装无法更改路径"]},
+    {"query": "cakewalk下载器打开提示无法连接互联网", "expect_title_substr": ["安装报错"]},
+    {"query": "导出音频的时候提示内部错误操作失败", "expect_title_substr": ["导出报错"]},
+    {"query": "更新cakewalk出现报错怎么办", "expect_title_substr": ["更新报错"]},
+    {"query": "打开cakewalk提示缺少dll文件", "expect_title_substr": ["缺少DLL文件"]},
+    {"query": "cakewalk打开就闪退 vc库都装了也没用", "expect_title_substr": ["打开就闪退"]},
+    {"query": "吉他录音延迟很大怎么办", "expect_title_substr": ["录音延迟过大"]},
+    {"query": "没有外置声卡 插耳机没声音还有电流声", "expect_title_substr": ["ASIO4ALL解决方案", "FL asio解决方案", "没声音"]},
+    {"query": "声卡设置没问题但是cakewalk就是没声音", "expect_title_substr": ["没声音"]},
+    {"query": "录音全是电流声失真", "expect_title_substr": ["电音、电流声、失真"]},
+    {"query": "播放时有个轨道偶尔串出其他轨道的音符", "expect_title_substr": ["音轨串频"]},
+    {"query": "cakewalk怎么登录激活", "expect_title_substr": ["如何登录激活"]},
+    {"query": "网页显示绿色标志但还是未激活", "expect_title_substr": ["无法激活"]},
+    {"query": "bandlab的工程怎么转到sonar继续做", "expect_title_substr": ["Bandlab与Sonar互通"]},
+    {"query": "midi键盘接上没声音", "expect_title_substr": ["MIDI键盘接上没声音"]},
+    {"query": "复制midi的时候clip叠加了怎么办", "expect_title_substr": ["Clip重叠"]},
+    {"query": "native access打开报错grant permission", "expect_title_substr": ["Native Access打开后报错"]},
+    {"query": "ample的免费音源装好后扫不出来", "expect_title_substr": ["Ample音源扫描不到"]}
+  ],
+  "negative_queries": [
+    "今天上海天气怎么样",
+    "帮我写个python爬虫",
+    "你们群主是谁",
+    "明天要不要开会"
+  ]
+}
