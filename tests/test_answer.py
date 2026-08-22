@@ -28,12 +28,6 @@ def env(tmp_path_factory):
     manifest = build_manifest(parsed, revision_id=8268, document_id="doc")
     data_root = tmp_path_factory.mktemp("qa_data")
     store = SnapshotStore(data_root)
-    # 造两张真实存在的图片文件验证 attach 逻辑
-    img_dir = data_root / "images"
-    img_dir.mkdir(parents=True)
-    first_entry = next(e for e in parsed.entries if len(e.images) >= 2)
-    for img in first_entry.images[:2]:
-        local = Path(img["local_path"]) if isinstance(img, dict) else None
     store.commit(manifest)
     retriever = Retriever(parsed.entries)
     return {"parsed": parsed, "store": store, "retriever": retriever, "manifest": manifest}
