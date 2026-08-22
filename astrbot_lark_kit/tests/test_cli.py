@@ -127,3 +127,24 @@ class TestParseEnvelope:
         envelope = parse_envelope('{"ok": true}')
         assert envelope.data == {}
         assert envelope.error.message == ""
+
+
+class TestRunCliJson:
+    async def test_plain_json_object(self, tmp_path: Path) -> None:
+        fake = make_fake_cli(
+            tmp_path,
+            stdout_obj={"appId": "cli_x", "identities": {"bot": {"available": True}}},
+        )
+        from astrbot_lark_kit.cli import run_lark_cli_json
+
+        obj = await run_lark_cli_json(["auth", "status"], env={"LARK_CLI_PATH": str(fake)})
+        assert obj["appId"] == "cli_x"
+
+    async def test_rejects_non_object(self, tmp_path: Path) -> None:
+        script = tmp_path / "array.sh"
+        script.write_text("#!/bin/sh\nprintf '[1,2]'\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        from astrbot_lark_kit.cli import run_lark_cli_json
+
+        with pytest.raises(CliInvalidOutputError):
+            await run_lark_cli_json(["x"], env={"LARK_CLI_PATH": str(script)})

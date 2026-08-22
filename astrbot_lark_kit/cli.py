@@ -2,14 +2,20 @@
 
 统一处理:可执行文件缺失、超时、非零退出、非法 JSON、非法 envelope、
 auth 失败分类。下游只面对 LarkEnvelope 或稳定的 LarkKitError。
+
+两种输出形态:
+- envelope 形态(docs/drive/base 等):{"ok": bool, ...} → run_lark_cli()
+- 裸 JSON 形态(auth status/whoami):顶层即数据对象 → run_lark_cli_json()
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 from .envelope import LarkEnvelope, parse_envelope
 from .errors import (
@@ -22,7 +28,6 @@ from .errors import (
 from .rate_limit import RateLimiter
 
 DEFAULT_TIMEOUT_S = 30.0
-_env_bin_cache: str | None = None
 
 
 def resolve_cli_bin(env: dict[str, str] | None = None) -> Path:
@@ -55,28 +60,12 @@ def _classify_failure(envelope: LarkEnvelope) -> Exception:
     )
 
 
-async def run_lark_cli(
+async def _spawn(
     args: list[str],
-    *,
-    timeout_s: float = DEFAULT_TIMEOUT_S,
-    limiter: RateLimiter | None = None,
-    env: dict[str, str] | None = None,
-    bin_path: Path | None = None,
-) -> LarkEnvelope:
-    """spawn lark-cli 并返回解析后的 envelope。
-
-    Raises:
-        CliNotFoundError: 二进制不存在。
-        CliTimeoutError: 超时(进程已被终止)。
-        CliExecutionError: 非零退出或 spawn 失败;或 envelope ok=false 且非 auth 类。
-        CliInvalidOutputError: stdout 无法解析为合法 envelope。
-        AuthRequiredError: envelope ok=false 且错误与登录态相关。
-    """
-    binary = bin_path or resolve_cli_bin(env=env)
-
-    if limiter is not None:
-        await limiter.acquire()
-
+    binary: Path,
+    timeout_s: float,
+) -> tuple[bytes, bytes]:
+    """spawn 并回收输出;非零退出抛 CliExecutionError。"""
     try:
         proc = await asyncio.create_subprocess_exec(
             str(binary),
@@ -98,19 +87,58 @@ async def run_lark_cli(
 
     if proc.returncode != 0:
         stderr_text = stderr.decode("utf-8", errors="replace").strip()
-        # 部分 CLI 在失败时仍向 stdout 输出结构化 envelope——优先尝试解析。
-        if stdout.strip():
-            try:
-                envelope = parse_envelope(stdout.decode("utf-8", errors="replace"))
-            except CliInvalidOutputError:
-                envelope = None
-            if envelope is not None and not envelope.ok:
-                raise _classify_failure(envelope)
         raise CliExecutionError(
             f"lark-cli 退出码 {proc.returncode}: {stderr_text[:500]}"
         )
+    return stdout, stderr
 
+
+async def run_lark_cli(
+    args: list[str],
+    *,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    limiter: RateLimiter | None = None,
+    env: dict[str, str] | None = None,
+    bin_path: Path | None = None,
+) -> LarkEnvelope:
+    """spawn lark-cli 并返回解析后的 envelope(envelope 形态命令)。
+
+    Raises:
+        CliNotFoundError: 二进制不存在。
+        CliTimeoutError: 超时(进程已被终止)。
+        CliExecutionError: 非零退出或 spawn 失败;或 envelope ok=false 且非 auth 类。
+        CliInvalidOutputError: stdout 无法解析为合法 envelope。
+        AuthRequiredError: envelope ok=false 且错误与登录态相关。
+    """
+    binary = bin_path or resolve_cli_bin(env=env)
+    if limiter is not None:
+        await limiter.acquire()
+
+    stdout, _ = await _spawn(args, binary, timeout_s)
     envelope = parse_envelope(stdout.decode("utf-8", errors="replace"))
     if not envelope.ok:
         raise _classify_failure(envelope)
     return envelope
+
+
+async def run_lark_cli_json(
+    args: list[str],
+    *,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    limiter: RateLimiter | None = None,
+    env: dict[str, str] | None = None,
+    bin_path: Path | None = None,
+) -> dict[str, Any]:
+    """spawn lark-cli 并解析裸 JSON 输出(auth status 等非 envelope 命令)。"""
+    binary = bin_path or resolve_cli_bin(env=env)
+    if limiter is not None:
+        await limiter.acquire()
+
+    stdout, _ = await _spawn(args, binary, timeout_s)
+    try:
+        obj = json.loads(stdout.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as exc:
+        raise CliInvalidOutputError(f"stdout 不是合法 JSON: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise CliInvalidOutputError("期望顶层 JSON 对象")
+    return obj

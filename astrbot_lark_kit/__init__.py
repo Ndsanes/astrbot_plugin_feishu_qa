@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .auth import AuthStatus, Health, auth_status_from_dict, health_of, parse_auth_status
-from .cli import resolve_cli_bin, run_lark_cli
+from .cli import resolve_cli_bin, run_lark_cli, run_lark_cli_json
 from .envelope import LarkCliErrorInfo, LarkEnvelope, parse_envelope
 from .errors import (
     AuthRequiredError,
@@ -36,4 +36,5 @@ __all__ = [
     "parse_envelope",
     "resolve_cli_bin",
     "run_lark_cli",
+    "run_lark_cli_json",
 ]
