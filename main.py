@@ -24,7 +24,6 @@ try:
     from astrbot_plugin_feishu_qa.answer.router import AnswerRouter
     from astrbot_plugin_feishu_qa.corpus.builder import build_manifest, diff_manifests
     from astrbot_plugin_feishu_qa.corpus.parser import parse_xml
-    from astrbot_plugin_feishu_qa.retrieval.scorer import Retriever
     from astrbot_plugin_feishu_qa.learn.candidate import (
         build_learn_prompt,
         candidate_to_pending_record,
@@ -32,6 +31,7 @@ try:
         format_candidate_display,
         parse_candidate,
     )
+    from astrbot_plugin_feishu_qa.retrieval.scorer import Retriever
     from astrbot_plugin_feishu_qa.storage.snapshot import SnapshotStore
 except ImportError:  # pragma: no cover - 直接以目录加载时的兜底
     from adapter.auth import AuthKeeper  # type: ignore
