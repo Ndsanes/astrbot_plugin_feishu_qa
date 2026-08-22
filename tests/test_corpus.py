@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -156,9 +157,6 @@ class TestSnapshotStore:
         store.commit(old)
         # 模拟坏 manifest(不可序列化)→ commit 抛异常 → 旧快照完好
         bad_manifest = {"entries": [{"bad": object()}]}
-        try:
-
+        with contextlib.suppress(TypeError):
             store.commit(bad_manifest)
-        except TypeError:
-            pass
         assert store.load()["revision_id"] == 100
