@@ -157,7 +157,6 @@ class TestSnapshotStore:
         # 模拟坏 manifest(不可序列化)→ commit 抛异常 → 旧快照完好
         bad_manifest = {"entries": [{"bad": object()}]}
         try:
-            import json as _json
 
             store.commit(bad_manifest)
         except TypeError:
