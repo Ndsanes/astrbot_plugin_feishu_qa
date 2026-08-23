@@ -5,7 +5,7 @@
 Workspace with two cooperating Python packages that form a Feishu-wiki-driven Q&A bot for QQ groups on AstrBot:
 
 - `astrbot_plugin_feishu_qa/` — the AstrBot plugin (`Star` subclass in `main.py`). Fetches a Feishu Q&A document, builds a local corpus snapshot, answers group questions with deterministic retrieval (zero LLM calls at high confidence) and falls back to the main Agent's `search_feishu_qa` tool only when confidence is low.
-- `astrbot_lark_kit/` — shared thin wrapper around the external `lark-cli` binary: subprocess invocation, envelope parsing, auth-status health checks, rate limiting, typed errors. The plugin imports it as a sibling package.
+- `astrbot_lark_kit/` — shared thin wrapper around the external `lark-cli` binary: subprocess invocation, envelope parsing, auth-status health checks, rate limiting, typed errors, and pure platform-identity parsing (`platforms.py`). **已发版为独立包**（GitHub `Ndsanes/astrbot_lark_kit`，tag v0.1.0，`pip install git+...@v0.1.0`），同时保留工作区源码作为开发模式。The plugin imports it as a sibling package.
 - `AstrBot/docs/` — official VitePress-based documentation source. Contains user guides, configuration references, API documentation, and plugin development tutorials in Markdown. Readable as plain text without building; VitePress adds navigation and search when served.
 
 Docs, docstrings, comments, and user-facing strings are in Chinese. Keep that convention.
@@ -39,9 +39,9 @@ Key flow points an editor must preserve:
 - `astrbot_plugin_feishu_qa/retrieval/scorer.py` — deterministic `Retriever`, `Confidence` levels
 - `astrbot_plugin_feishu_qa/answer/` — `router.py` (whitelist + confidence routing, pure logic), `direct.py` (direct-answer formatting)
 - `astrbot_plugin_feishu_qa/storage/snapshot.py` — atomic snapshot persistence (`SnapshotStore`)
-- `astrbot_plugin_feishu_qa/learn/candidate.py` — `/learn` candidate extraction, pending-QA store (never writes back to Feishu)
+- `astrbot_plugin_feishu_qa/learn/` — `candidate.py` `/learn` candidate extraction + pending-QA store; `writeback.py` 写回纯逻辑（块构造、查重守卫、记录键）。真实写回只允许指向 `LEARNING_WRITEBACK_DOC_URL` 配置的**副本文档**，生产文档写回是人工步骤
 - `astrbot_plugin_feishu_qa/tools/build_qa_corpus.py` — offline/online corpus build CLI
-- `astrbot_lark_kit/` — `cli.py` (`run_lark_cli` / `run_lark_cli_json`), `envelope.py`, `errors.py` (`LarkKitError` hierarchy), `rate_limit.py` (`RateLimiter`), `auth.py`
+- `astrbot_lark_kit/` — `cli.py` / `envelope.py` / `errors.py`（含 `UmoParseError`）/ `rate_limit.py` / `auth.py` / `platforms.py`（UMO → 平台实例身份，纯解析层）；`pyproject.toml` 零运行时依赖可安装
 - `tests/` under each package; `astrbot_plugin_feishu_qa/tests/fixtures/` holds real-corpus snapshots (`qa_r8268.xml/json/md`, `qa_r8394.xml`, `meta.json`, `retrieval_queries.json`)
 
 ## Development Commands
@@ -81,20 +81,21 @@ No build step exists; packages run from source.
 
 - [astrbot_plugin_feishu_qa/main.py](astrbot_plugin_feishu_qa/main.py) — entry point, `@register`d `FeishuQaPlugin(Star)`
 - [astrbot_plugin_feishu_qa/_conf_schema.json](astrbot_plugin_feishu_qa/_conf_schema.json) — WebUI config schema (single source of config truth)
-- [astrbot_plugin_feishu_qa/metadata.yaml](astrbot_plugin_feishu_qa/metadata.yaml) — plugin manifest; `support_platforms: aiocqhttp` only, requires `astrbot >=4.5.7`
+- [astrbot_plugin_feishu_qa/metadata.yaml](astrbot_plugin_feishu_qa/metadata.yaml) — plugin manifest; `support_platforms: aiocqhttp + qq_official`, requires `astrbot >=4.5.7`
 - [astrbot_plugin_feishu_qa/corpus/model.py](astrbot_plugin_feishu_qa/corpus/model.py) — ID stability rules (read before touching parsing/identity)
 - [astrbot_lark_kit/__init__.py](astrbot_lark_kit/__init__.py) — kit public API surface
-- [astrbot_plugin_feishu_qa/tests/VERIFICATION_REPORT.md](astrbot_plugin_feishu_qa/tests/VERIFICATION_REPORT.md) — acceptance gates and known platform limitations (e.g. merged-forward messages not adapted for `qq_official`)
+- [astrbot_plugin_feishu_qa/tests/VERIFICATION_REPORT.md](astrbot_plugin_feishu_qa/tests/VERIFICATION_REPORT.md) — acceptance gates and known platform limitations（#4 合并转发已于 v0.2.0 以能力探测收口：`_supports_merged_forward`）
 
 ## Runtime/Tooling Preferences
 
-- Plain Python 3.12+; **no third-party pip dependencies** (spec §0.14 minimal-dependency principle). `requirements.txt` is intentionally empty of packages — `lark-kit` is consumed as sibling source via `pythonpath = ["."]`.
+- Plain Python 3.12+; **no third-party pip dependencies** (spec §0.14 minimal-dependency principle). `astrbot_lark_kit` 解析顺序：① 开发环境 workspace 源码（根 `pyproject.toml` 的 `pythonpath=["."]`）→ ② pip 安装版（feishu_qa/requirements.txt 钉 `git+...@v0.1.0`）→ ③ 插件 zip 内 vendored 副本（打包脚本烘焙）。部署布局回归门禁覆盖"裸实例走 vendored 兜底"与"顶层有安装版 kit"两个场景。
 - `lark-cli` is **carried by the plugin**: packaging script downloads official release binaries (linux-amd64/arm64, sha256-verified) into `vendor/lark-cli/<platform>/`. Resolution order: explicit `bin_path` injection (tests) → vendored binary → `LARK_CLI_PATH` env → PATH. Auth state is redirected via subprocess `HOME` into `<plugin data>/lark_cli_home/` so login survives container rebuilds; admins authorize headlessly with `/qa_auth_login` or the auto-pushed re-auth card.
 - No lockfile, no package manager beyond pip; do not add dependencies without strong justification.
 
 ## Testing & QA
 
-- pytest with `asyncio_mode = "auto"` (bare `async def test_*` works, no decorators) and `testpaths` limited to both `tests/` directories.
+- pytest with `asyncio_mode = "auto"` (bare `async def test_*` works, no decorators). 根 `testpaths` 含 `astrbot_lark_kit/tests` 与 `astrbot_plugin_feishu_qa/tests`；bili_verify 是独立仓库（gitignore），测试用 `pytest astrbot_plugin_bili_verify_feishu/tests -q` 显式运行（其 tests/stubs 同样提供 astrbot/lark_oapi 假包）。
+- 当前基线（2026-08-24，三插件深化工程 v1.1 收口）：kit 45 + feishu_qa 91 + bili_verify 42 = **178 passed**。基线值只增不减，验收标准是"全套 PASS"而非固定数字。
 - When the real `astrbot` package isn't installed, [conftest.py](astrbot_plugin_feishu_qa/tests/conftest.py) prepends `tests/stubs/` containing a minimal fake `astrbot` package (`api.event.AstrMessageEvent`, `api.star.Star`, etc.) so the suite runs offline.
 - Tests use real fixture corpora (`qa_r8268.xml`, revision-tagged) rather than mocks for parser/builder/retrieval paths; `test_main.py` builds a live plugin instance against a `tmp_path` data dir via `monkeypatch.setenv("ASTRBOT_DATA_DIR", ...)`.
 - Retrieval regression queries live in `tests/fixtures/retrieval_queries.json`; keep them passing when touching `retrieval/scorer.py`.
