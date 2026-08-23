@@ -54,6 +54,7 @@ class FeishuQaPlugin(Star):
             doc_ref=self._cfg("WIKI_URL") or DEFAULT_WIKI_URL,
             state_home=self.data_root / "lark_cli_home",
         )
+        logger.info("[FeishuQA] %s", self.adapter.cli_diagnostics())
         self.keeper = AuthKeeper(
             self.adapter, warning_hours=float(self._cfg("AUTH_WARNING_HOURS", 48))
         )
@@ -111,7 +112,7 @@ class FeishuQaPlugin(Star):
 
     @staticmethod
     def _manifest_to_entries(manifest: dict) -> list:
-        from astrbot_plugin_feishu_qa.corpus.model import QaEntry, QaImage
+        from .corpus.model import QaEntry, QaImage
 
         entries = []
         for raw in manifest.get("entries", []):
@@ -172,7 +173,7 @@ class FeishuQaPlugin(Star):
             logger.info("[FeishuQA] 未配置 ADMIN_OPEN_ID,跳过卡片推送")
             return False
 
-        from astrbot_plugin_feishu_qa.adapter.auth import (
+        from .adapter.auth import (
             build_auth_card,
             initiate_reauth_flow,
             poll_auth_completion,
@@ -343,6 +344,7 @@ class FeishuQaPlugin(Star):
             return
         manifest = self.store.load() or {}
         lines = [
+            self.adapter.cli_diagnostics(),
             f"revision: {manifest.get('revision_id', '无')}",
             f"QA 条目: {manifest.get('entry_count', 0)}",
             f"图片数量: {manifest.get('image_count', 0)}",
@@ -385,10 +387,7 @@ class FeishuQaPlugin(Star):
         if not self._is_admin(event):
             yield event.plain_result("仅管理员可用")
             return
-        from astrbot_plugin_feishu_qa.adapter.auth import (
-            initiate_reauth_flow,
-            poll_auth_completion,
-        )
+        from .adapter.auth import initiate_reauth_flow, poll_auth_completion
 
         if self._poll_task is not None and not self._poll_task.done():
             yield event.plain_result("已有授权流程进行中,请先完成或稍后再试")
