@@ -46,6 +46,15 @@
   adapter 改为在目标目录内以相对文件名调用(`test` 回归 97 passed)
 - bot 身份 IM 提醒实测送达(open_id ou_1e5b…bedd,message om_x100b67973f36c8a)
 
+## 夜间后补验证(同会话)
+
+- **块 ID 漂移修正**:r8394 实测发现飞书在任何结构编辑后会重生成全部块 ID,
+  原 locator 优先的 ID 策略失效(表现为增量 diff 全量误报)。已切换为内容派生 ID,
+  双真实基线验证:41/41 跨 revision 稳定,增量 diff 正确识别"新增 1 条"。
+- **一键重登卡片**:bot 身份推送交互式卡片(orange 头/点击授权按钮)实测送达;
+  Device Flow `--no-wait` 发起 → 卡片按钮 → 后台 `--device-code` 轮询闭环已接线。
+- 测试总数 97 → **104**。
+
 ## 已知限制与假设
 
 1. lark-kit 以 workspace 源码形式分发;发布时 requirements.txt 改为 git URL 依赖。
