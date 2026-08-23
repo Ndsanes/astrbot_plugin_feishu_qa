@@ -6,6 +6,7 @@ Workspace with two cooperating Python packages that form a Feishu-wiki-driven Q&
 
 - `astrbot_plugin_feishu_qa/` — the AstrBot plugin (`Star` subclass in `main.py`). Fetches a Feishu Q&A document, builds a local corpus snapshot, answers group questions with deterministic retrieval (zero LLM calls at high confidence) and falls back to the main Agent's `search_feishu_qa` tool only when confidence is low.
 - `astrbot_lark_kit/` — shared thin wrapper around the external `lark-cli` binary: subprocess invocation, envelope parsing, auth-status health checks, rate limiting, typed errors. The plugin imports it as a sibling package.
+- `AstrBot/docs/` — official VitePress-based documentation source. Contains user guides, configuration references, API documentation, and plugin development tutorials in Markdown. Readable as plain text without building; VitePress adds navigation and search when served.
 
 Docs, docstrings, comments, and user-facing strings are in Chinese. Keep that convention.
 
@@ -118,4 +119,3 @@ api.post("/api/v1/plugins/reload", json={})
 ```bash
 python3 -c "import json; spec=json.load(open('.reference/astrbot-openapi.json')); print('\n'.join(spec['paths']))"
 ```
-
