@@ -49,7 +49,7 @@ except ImportError:  # 开发环境:工作区源码或 pip 安装版
 
 from .platform_event import LarkCliPlatformEvent, deliver_chain
 
-PLUGIN_DIR = Path(__file__).resolve().parent.parent
+PLUGIN_DIR = Path(__file__).resolve().parent
 VENDOR_DIR = PLUGIN_DIR / "vendor" / "lark-cli"
 
 
@@ -91,7 +91,11 @@ class LarkCliPlatform(Platform):
             return binary
         if self.config.get("bootstrap_cli", True):
             try:
-                await asyncio.to_thread(ensure_bundled_cli, VENDOR_DIR)
+                from astrbot_lark_kit import bundled_cli_platform
+                plat = bundled_cli_platform()
+                plats = (plat,) if plat else ()
+                if plats:
+                    await asyncio.to_thread(ensure_bundled_cli, VENDOR_DIR, platforms=plats)
                 binary = find_bundled_cli(VENDOR_DIR)
                 if binary is not None:
                     return binary
