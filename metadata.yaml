@@ -7,4 +7,5 @@ author: NDsans
 repo: https://github.com/Ndsanes/astrbot_plugin_feishu_qa
 support_platforms:
   - aiocqhttp
+  - qq_official
 astrbot_version: ">=4.5.7"
