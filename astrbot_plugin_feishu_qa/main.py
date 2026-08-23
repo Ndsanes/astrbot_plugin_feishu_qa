@@ -55,6 +55,11 @@ class FeishuQaPlugin(Star):
             state_home=self.data_root / "lark_cli_home",
         )
         logger.info("[FeishuQA] %s", self.adapter.cli_diagnostics())
+        self._bootstrap_task: asyncio.Task | None = None
+        if self.adapter.bundled_cli_path is None:
+            # vendored 二进制缺失(GitHub 安装不带 vendor):initialize 时后台自举,
+            # 不阻塞加载;失败仅告警,解析链继续走 LARK_CLI_PATH/PATH
+            logger.info("[FeishuQA] vendored lark-cli 缺失,将在初始化时后台自举下载")
         self.keeper = AuthKeeper(
             self.adapter, warning_hours=float(self._cfg("AUTH_WARNING_HOURS", 48))
         )
@@ -153,14 +158,43 @@ class FeishuQaPlugin(Star):
             logger.warning("[FeishuQA][CONFIG] %s", config_err)
         if int(self._cfg("SYNC_INTERVAL_HOURS", 12)) > 0:
             self._sync_task = asyncio.create_task(self._sync_loop())
+        if self.adapter.bundled_cli_path is None:
+            self._bootstrap_task = asyncio.create_task(self._bootstrap_bundled_cli())
         if int(self._cfg("AUTH_CHECK_HOURS", 12)) > 0:
             self._auth_task = asyncio.create_task(self._auth_loop())
 
+
     async def terminate(self) -> None:
-        for task in (self._sync_task, self._auth_task, getattr(self, "_poll_task", None)):
+        for task in (
+            self._sync_task,
+            self._auth_task,
+            getattr(self, "_poll_task", None),
+            getattr(self, "_bootstrap_task", None),
+        ):
             if task:
                 task.cancel()
 
+    async def _bootstrap_bundled_cli(self) -> None:
+        """后台补齐 vendored lark-cli(GitHub 安装形态不带二进制)。
+
+        成功后刷新 adapter 二进制定位与诊断;失败仅告警——
+        PATH/LARK_CLI_PATH 兜底保持可用,同步降级旧语料继续服务。
+        """
+        from astrbot_lark_kit import ensure_bundled_cli
+
+        try:
+            installed = await asyncio.to_thread(
+                ensure_bundled_cli, self.adapter.vendor_dir
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("[FeishuQA] lark-cli 自举下载失败(PATH 兜底仍可用): %s", exc)
+            return
+        self.adapter.refresh_binary()
+        for plat, path in installed.items():
+            logger.info("[FeishuQA] 自举完成: %s -> %s", plat, path)
+        logger.info("[FeishuQA] %s", self.adapter.cli_diagnostics())
     # ── 后台任务 ──
 
     async def _sync_loop(self) -> None:

@@ -96,6 +96,7 @@ No build step exists; packages run from source.
 
 - pytest with `asyncio_mode = "auto"` (bare `async def test_*` works, no decorators). 根 `testpaths` 含 `astrbot_lark_kit/tests` 与 `astrbot_plugin_feishu_qa/tests`；bili_verify 是独立仓库（gitignore），测试用 `pytest astrbot_plugin_bili_verify_feishu/tests -q` 显式运行（其 tests/stubs 同样提供 astrbot/lark_oapi 假包）。
 - 当前基线（2026-08-24，三插件深化工程 v1.1 收口）：kit 45 + feishu_qa 91 + bili_verify 42 = **178 passed**。基线值只增不减，验收标准是"全套 PASS"而非固定数字。
+- **bili_verify 白名单条目形态（v0.0.7 教训）**：qq_official 条目须为完整 UMO `实例ID:GroupMessage:群openid`（多 bot 轮询按首段定位归属 bot）；`AdmissionsStore.is_whitelisted` 同时接受裸 openid 与 UMO 全串（按末段匹配）。改任何一侧的数据形态时，轮询、校验、审批三条链路必须同步，否则会出现"能拉到申请但被判非白名单"的静默丢弃。
 - When the real `astrbot` package isn't installed, [conftest.py](astrbot_plugin_feishu_qa/tests/conftest.py) prepends `tests/stubs/` containing a minimal fake `astrbot` package (`api.event.AstrMessageEvent`, `api.star.Star`, etc.) so the suite runs offline.
 - Tests use real fixture corpora (`qa_r8268.xml`, revision-tagged) rather than mocks for parser/builder/retrieval paths; `test_main.py` builds a live plugin instance against a `tmp_path` data dir via `monkeypatch.setenv("ASTRBOT_DATA_DIR", ...)`.
 - Retrieval regression queries live in `tests/fixtures/retrieval_queries.json`; keep them passing when touching `retrieval/scorer.py`.
@@ -104,7 +105,9 @@ No build step exists; packages run from source.
 
 ## AstrBot 实例 OpenAPI 访问
 
-- 已部署实例：`https://astrbot.ngames.work/`，凭据与配置在仓库根目录 [.env](.env)（已 gitignore）：`ASTRBOT_BASE_URL`、`ASTRBOT_API_KEY`、`ASTRBOT_API_KEY_ISSUED_AT`（Key 有效期 30 天）。
+- 已部署实例：`https://astrbot.ngames.work/`，凭据与配置在仓库根目录 [.env](.env)（已 gitignore）：`ASTRBOT_BASE_URL`、`ASTRBOT_API_KEY`、`ASTRBOT_API_KEY_ISSUED_AT`（Key 有效期 30 天）、`ASTRBOT_DASHBOARD_USERNAME/PASSWORD`（管理员面板账号）。
+- **scope 不足时自动提权**：仓库 API key 无 logs 等 scope（403 `Insufficient API key scope`），且 API key 无法自签发更高权限。客户端遇 403 会自动用管理员账号登录 `POST /api/v1/auth/login` 换 JWT（scopes=["*"]，注意本实例回包字段是 `data.token`）重试。JWT 落盘缓存 `.astrbot_jwt_cache`（gitignored）：解析 payload `exp` 判过期、401 才强制重登，进程内与跨进程均复用，**不要每次请求都重新登录**。
+- 看线上日志：`python3 astrbot_api.py logs [过滤关键词] [条数]`（走 `/api/v1/logs/history`，自动清 ANSI 颜色码）。日志行为 `{"level","time","data"}` 结构，`data` 内嵌完整格式化行。
 - 封装客户端：[astrbot_api.py](astrbot_api.py)，零第三方依赖（urllib）。用法：
 
 ```python

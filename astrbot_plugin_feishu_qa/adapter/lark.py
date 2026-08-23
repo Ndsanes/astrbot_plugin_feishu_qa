@@ -79,6 +79,22 @@ class LarkAdapter:
             return candidate
         return None
 
+    @property
+    def vendor_dir(self) -> Path:
+        """vendored 二进制根目录(自举下载的目标位置)。"""
+        return self._vendor_dir
+
+    @property
+    def bundled_cli_path(self) -> Path | None:
+        """vendored 二进制当前路径;None = 缺失(可触发自举下载)。"""
+        return self._resolve_bundled()
+
+    def refresh_binary(self) -> None:
+        """重新解析二进制(自举下载完成后调用,使 vendored 生效)。"""
+        if self._bin_path is None:
+            self._bin_path = self._resolve_bundled()
+            self.bin_path = self._bin_path
+
     def cli_diagnostics(self) -> str:
         """人读的 CLI 解析报告(供 /qa_status 展示)。"""
         binary = self._bin_path or find_bundled_cli(self._vendor_dir)
