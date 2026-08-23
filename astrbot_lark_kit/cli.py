@@ -64,6 +64,8 @@ async def _spawn(
     args: list[str],
     binary: Path,
     timeout_s: float,
+    *,
+    cwd: str | None = None,
 ) -> tuple[bytes, bytes]:
     """spawn 并回收输出;非零退出抛 CliExecutionError。"""
     try:
@@ -72,6 +74,7 @@ async def _spawn(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
         )
     except (FileNotFoundError, PermissionError, NotADirectoryError) as exc:
         raise CliNotFoundError(f"无法启动 lark-cli: {exc}") from exc
@@ -100,6 +103,7 @@ async def run_lark_cli(
     limiter: RateLimiter | None = None,
     env: dict[str, str] | None = None,
     bin_path: Path | None = None,
+    cwd: str | None = None,
 ) -> LarkEnvelope:
     """spawn lark-cli 并返回解析后的 envelope(envelope 形态命令)。
 
@@ -114,7 +118,7 @@ async def run_lark_cli(
     if limiter is not None:
         await limiter.acquire()
 
-    stdout, _ = await _spawn(args, binary, timeout_s)
+    stdout, _ = await _spawn(args, binary, timeout_s, cwd=cwd)
     envelope = parse_envelope(stdout.decode("utf-8", errors="replace"))
     if not envelope.ok:
         raise _classify_failure(envelope)
@@ -128,13 +132,14 @@ async def run_lark_cli_json(
     limiter: RateLimiter | None = None,
     env: dict[str, str] | None = None,
     bin_path: Path | None = None,
+    cwd: str | None = None,
 ) -> dict[str, Any]:
     """spawn lark-cli 并解析裸 JSON 输出(auth status 等非 envelope 命令)。"""
     binary = bin_path or resolve_cli_bin(env=env)
     if limiter is not None:
         await limiter.acquire()
 
-    stdout, _ = await _spawn(args, binary, timeout_s)
+    stdout, _ = await _spawn(args, binary, timeout_s, cwd=cwd)
     try:
         obj = json.loads(stdout.decode("utf-8", errors="replace"))
     except json.JSONDecodeError as exc:

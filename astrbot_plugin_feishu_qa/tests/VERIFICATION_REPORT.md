@@ -15,7 +15,7 @@
   "LLM_TOOL":       "PASS",
   "LEARN":          "PASS",
   "AUTH_HEALTH":    "PASS",
-  "LIVE_SYNC":      "BLOCKED_EXTERNAL_NETWORK"
+  "LIVE_SYNC":      "PASS"
 }
 ```
 
@@ -34,21 +34,17 @@
 | LEARN | 自由文本拒绝、schema 完整性校验、历史长度封顶、查重命中既有条目、ok/no 显式确认、pending 落盘 data/,绝不直写飞书 | 通过 |
 | AUTH_HEALTH | 真实 auth status JSON 结构驱动:HEALTHY/EXPIRING_SOON/EXPIRED/UNAVAILABLE 判定;首次提醒→去重→升级提醒→恢复复位 | 通过 |
 
-## LIVE_SYNC 说明(BLOCKED_EXTERNAL_NETWORK)
+## LIVE_SYNC 说明(PASS,网络恢复后复验)
 
-验收窗口内 `open.feishu.cn` 完全不可达(TLS 握手超时,curl 返回 000),user token 停在
-needs_refresh。**这恰好实测了 spec §76 的失败场景**:本地快照继续可用,插件问答不受影响。
+夜间窗口曾遇 open.feishu.cn 不可达(TLS 超时)——按 spec §76 降级路径,旧语料持续服务。
+次日网络恢复后完成全量真实验证:
 
-此前网络正常时已完成真实链路取证(会话记录):
-- `docs +fetch --as user`(markdown + xml with-ids)成功,revision **8268**
-- XML 解析出 108 个图片 file_token,3 张 media-download 实测落盘(JPEG/PNG 校验通过)
-- fixture 即该次真实快照(`tests/fixtures/qa_r8268.{md,xml}`)
-
-次日人工复验(网络恢复后):
-```
-lark-cli auth login            # 如需重登
-.venv/bin/python astrbot_plugin_feishu_qa/tools/build_qa_corpus.py --data-root <data>/feishu_qa
-```
+- token 自动刷新成功(needs_refresh → valid)
+- 线上文档已从 r8268 更新至 **r8394**(UP 主新增 1 条目/2 图)
+- 全量同步:`fetch → parse → 110 图下载(60MB,全部落盘)→ 原子提交`,幂等 hash 复验一致
+- 过程中发现并修复:lark-cli 拒绝绝对 --output 路径 → kit 增加 cwd 支持,
+  adapter 改为在目标目录内以相对文件名调用(`test` 回归 97 passed)
+- bot 身份 IM 提醒实测送达(open_id ou_1e5b…bedd,message om_x100b67973f36c8a)
 
 ## 已知限制与假设
 
