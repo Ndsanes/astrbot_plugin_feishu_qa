@@ -651,7 +651,10 @@ class FeishuQaPlugin(Star):
     # ── 发送辅助 ──
 
     async def _send_direct(self, event: AstrMessageEvent, direct) -> None:
-        """aiocqhttp 走 OneBot 合并转发;其余平台(如 qq_official)发普通消息。"""
+        """直答发送:支持合并转发的平台走 Node 转发,其余发普通多图消息。
+
+        能力探测见 _supports_merged_forward;构建失败仍会回退普通消息。
+        """
         import astrbot.api.message_components as Comp
         from astrbot.api.event import MessageChain
 
@@ -661,7 +664,7 @@ class FeishuQaPlugin(Star):
             platform_name = str(event.get_platform_name() or "")
 
         chain = None
-        if platform_name != "qq_official":
+        if self._supports_merged_forward(platform_name):
             try:
                 uin = int(event.get_self_id() or 10000)
                 content = [Comp.Plain(direct.text)]
@@ -686,6 +689,17 @@ class FeishuQaPlugin(Star):
             fallback = MessageChain()
             fallback.message(direct.text)
             await event.send(fallback)
+
+    @staticmethod
+    def _supports_merged_forward(platform_name: str) -> bool:
+        """合并转发能力探测(VERIFICATION_REPORT 已知限制 #4 的收口)。
+
+        - qq_official 官方网关不提供 OneBot 语义的 Node.uin 合并转发,
+          明确返回 False,走普通多图消息;
+        - 其余平台默认尝试构建,构建失败由调用方回退普通消息。
+        未来接入新平台时只需在此登记实测结论,不改发送逻辑。
+        """
+        return platform_name != "qq_official"
 
     # ── 文本工具 ──
 
