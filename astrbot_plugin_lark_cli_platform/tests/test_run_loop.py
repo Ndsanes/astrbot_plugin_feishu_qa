@@ -146,4 +146,4 @@ def test_registration_metadata():
     assert name == "lark_cli"
     forbidden = {"app_id", "app_secret", "send_as", "receive_as", "identity", "token"}
     assert not forbidden & set(tmpl)
-    assert set(tmpl) == {"lark_cli_home", "bootstrap_cli", "enabled_chats"}
+    assert set(tmpl) == {"enabled_chats"}  # 二进制/登录态为内部事务,不进用户配置

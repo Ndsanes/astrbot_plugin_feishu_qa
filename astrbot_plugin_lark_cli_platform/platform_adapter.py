@@ -56,7 +56,7 @@ VENDOR_DIR = PLUGIN_DIR / "vendor" / "lark-cli"
 @register_platform_adapter(
     "lark_cli",
     "lark-cli 平台适配器(bot 身份收发)",
-    default_config_tmpl={"lark_cli_home": "", "bootstrap_cli": True, "enabled_chats": []},
+    default_config_tmpl={"enabled_chats": []},
 )
 class LarkCliPlatform(Platform):
     def __init__(self, platform_config: dict, platform_settings: dict, event_queue) -> None:
@@ -72,8 +72,9 @@ class LarkCliPlatform(Platform):
     async def run(self):
         logger.info("[lark_cli] 平台适配器启动中(1/4:数据目录)")
         data_dir = StarTools.get_data_dir("astrbot_plugin_lark_cli_platform")
-        home_cfg = str(self.config.get("lark_cli_home") or "").strip()
-        state_home = Path(home_cfg) if home_cfg else resolve_state_home(data_dir)
+        # 登录态目录为内部事务:默认与 feishu_qa 共享同一约定目录,无需用户配置
+        legacy_home = str(self.config.get("lark_cli_home") or "").strip()  # 兼容旧配置
+        state_home = Path(legacy_home) if legacy_home else resolve_state_home(data_dir)
 
         binary = await self._aresolve_binary()
         if binary is None:
@@ -92,7 +93,7 @@ class LarkCliPlatform(Platform):
         binary = find_bundled_cli(VENDOR_DIR)
         if binary is not None:
             return binary
-        if self.config.get("bootstrap_cli", True):
+        if True:  # 自举是内部事务:二进制缺失时总是自动补齐,无用户开关
             try:
                 from astrbot_lark_kit import bundled_cli_platform
                 plat = bundled_cli_platform()
