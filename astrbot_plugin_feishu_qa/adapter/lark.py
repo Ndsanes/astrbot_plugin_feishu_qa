@@ -179,6 +179,43 @@ class LarkAdapter:
             revision_id=revision_id,
         )
 
+    async def append_doc_content(self, content_markdown: str) -> int:
+        """向文档末尾追加一段 markdown 内容(单次完整提交),返回新 revision。
+
+        原子性语义:内容经临时文件以 @file 一次性交给 lark-cli
+        (docs +update --command append);失败抛异常,由调用方保留候选降级,
+        本方法不做重试、不部分提交。
+        """
+        import tempfile
+
+        content_markdown = content_markdown.rstrip("\n") + "\n"
+        with tempfile.TemporaryDirectory(prefix="feishu_qa_wb_") as td:
+            payload = Path(td) / "writeback_block.md"
+            payload.write_text(content_markdown, encoding="utf-8")
+            envelope = await self._run(
+                [
+                    "docs",
+                    "+update",
+                    "--as",
+                    "user",
+                    "--doc",
+                    self.doc_ref,
+                    "--command",
+                    "append",
+                    "--content",
+                    "@writeback_block.md",
+                    "--doc-format",
+                    DOC_FORMAT_MARKDOWN,
+                ],
+                timeout_s=_MEDIA_TIMEOUT_S,
+                cwd=td,
+            )
+        doc = envelope.document
+        try:
+            return int(doc.get("revision_id", -1))
+        except (TypeError, ValueError):
+            return -1
+
     # ── 媒体 ──
 
     async def download_media(

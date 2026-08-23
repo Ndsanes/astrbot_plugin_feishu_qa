@@ -73,6 +73,12 @@
     "type": "int",
     "default": 50
   },
+  "LEARNING_WRITEBACK_DOC_URL": {
+    "description": "/learn 写回目标文档链接(副本文档;留空 = 关闭写回,候选仅落盘)",
+    "type": "string",
+    "hint": "强烈建议填一份生产 Q&A 文档的副本,验证无误后再人工切换",
+    "default": ""
+  },
   "FEISHU_APP_ID": {
     "description": "飞书应用 App ID(可选;填写后插件自动完成 lark-cli config init,无需手动配置)",
     "type": "string",
