@@ -89,7 +89,29 @@ class LarkCliPlatform(Platform):
                 continue
             abm = await self.convert_message(msg)
             await self.handle_msg(abm, msg.chat_id)
+    def _repair_bundled_binary(self) -> None:
+        """解压器可能丢失可执行位/版本标记缺失:启动时就地修复(离线安全)。"""
+        from astrbot_lark_kit import DEFAULT_CLI_VERSION, bundled_cli_platform
+        plat = bundled_cli_platform()
+        if not plat:
+            return
+        plat_dir = VENDOR_DIR / "lark-cli" / plat
+        binary = plat_dir / "lark-cli"
+        if not (binary.is_file() and binary.stat().st_size > 0):
+            return
+        try:
+            binary.chmod(binary.stat().st_mode | 0o111)
+        except OSError:
+            pass
+        marker = plat_dir / ".cli_version"
+        if not marker.is_file():
+            try:
+                marker.write_text(DEFAULT_CLI_VERSION)
+            except OSError:
+                pass
+
     async def _aresolve_binary(self) -> Path | None:
+        self._repair_bundled_binary()
         binary = find_bundled_cli(VENDOR_DIR)
         if binary is not None:
             return binary
