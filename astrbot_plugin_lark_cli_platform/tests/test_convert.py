@@ -12,7 +12,6 @@ from .helpers import make_msg
 def make_adapter(enabled_chats=None) -> LarkCliPlatform:
     return LarkCliPlatform(
         {"lark_cli_home": "", "bootstrap_cli": False, "enabled_chats": enabled_chats or []},
-        {},
         event_queue=None,
     )
 
