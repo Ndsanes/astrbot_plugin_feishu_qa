@@ -59,8 +59,8 @@ VENDOR_DIR = PLUGIN_DIR / "vendor" / "lark-cli"
     default_config_tmpl={"enabled_chats": []},
 )
 class LarkCliPlatform(Platform):
-    def __init__(self, platform_config: dict, event_queue) -> None:
-        # 实测基类签名(config, event_queue);文档中的三参数形式已过时
+    def __init__(self, platform_config: dict, platform_settings: dict, event_queue) -> None:
+        # manager 固定传 (config, settings, event_queue);基类收 (config, event_queue)
         super().__init__(platform_config, event_queue)
         self.config = platform_config
         self._stream: EventStream | None = None

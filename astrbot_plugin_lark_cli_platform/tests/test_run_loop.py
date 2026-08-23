@@ -16,7 +16,7 @@ def make_adapter(config_overrides=None, queue=None):
     config = {"lark_cli_home": "", "bootstrap_cli": False, "enabled_chats": []}
     config.update(config_overrides or {})
     q = queue if queue is not None else asyncio.Queue()
-    return pa.LarkCliPlatform(config, q), q
+    return pa.LarkCliPlatform(config, {}, q), q
 
 
 def install_fakes(monkeypatch, messages, binary=Path("/fake/lark-cli")):
