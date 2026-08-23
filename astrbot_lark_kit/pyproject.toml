@@ -5,8 +5,7 @@ name = "astrbot-lark-kit"
 version = "0.1.0"
 description = "lark-cli 稳定适配层:子进程调用、envelope 解析、错误归一、限流、登录态健康检查与平台标识解析"
 readme = "README.md"
-requires-python = ">=3.12"
-license = { text = "GPL-3.0-or-later" }
+license = { text = "AGPL-3.0-or-later" }
 dependencies = []
 
 [build-system]
