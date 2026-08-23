@@ -10,3 +10,5 @@ dist/
 output/
 data/
 output/cakewalk/
+astrbot/
+astrbot_plugin_bili_verify_feishu/
