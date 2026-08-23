@@ -1,0 +1,23 @@
+# astrbot-lark-kit 包元数据。零第三方运行时依赖(spec §0.14):
+# 仅使用 Python 标准库;构建依赖(setuptools)不属于运行时依赖。
+[project]
+name = "astrbot-lark-kit"
+version = "0.1.0"
+description = "lark-cli 稳定适配层:子进程调用、envelope 解析、错误归一、限流、登录态健康检查与平台标识解析"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "GPL-3.0-or-later" }
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# 本目录本身即包目录(astrbot_lark_kit/),用 package-dir 把包名映射到当前目录,
+# 使 `pip install ./astrbot_lark_kit` 与 `pip install git+...@v0.1.0`(仓库根即此目录)均可安装。
+# tests/ 不是被列出的包,不会被打进发行物。
+[tool.setuptools]
+packages = ["astrbot_lark_kit"]
+
+[tool.setuptools.package-dir]
+astrbot_lark_kit = "."

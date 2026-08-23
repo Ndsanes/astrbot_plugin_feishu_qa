@@ -10,7 +10,6 @@ from .cli import (
     run_lark_cli,
     run_lark_cli_json,
 )
-from .envelope import LarkCliErrorInfo, LarkEnvelope, parse_envelope
 from .errors import (
     AuthRequiredError,
     CliExecutionError,
@@ -18,7 +17,9 @@ from .errors import (
     CliNotFoundError,
     CliTimeoutError,
     LarkKitError,
+    UmoParseError,
 )
+from .platforms import PlatformIdentity, resolve_platform_instance
 from .rate_limit import RateLimiter
 
 __version__ = "0.1.0"
@@ -34,7 +35,9 @@ __all__ = [
     "LarkCliErrorInfo",
     "LarkEnvelope",
     "LarkKitError",
+    "PlatformIdentity",
     "RateLimiter",
+    "UmoParseError",
     "__version__",
     "auth_status_from_dict",
     "bundled_cli_platform",
@@ -43,6 +46,8 @@ __all__ = [
     "parse_auth_status",
     "parse_envelope",
     "resolve_cli_bin",
+    "resolve_platform_instance",
     "run_lark_cli",
     "run_lark_cli_json",
 ]
+

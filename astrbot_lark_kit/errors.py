@@ -44,3 +44,9 @@ class AuthRequiredError(LarkKitError):
     """
 
     code = "AUTH_REQUIRED"
+
+
+class UmoParseError(LarkKitError):
+    """UMO 无法解析为平台身份(空值 / 段数不符 / 必需段为空)。"""
+
+    code = "UMO_PARSE_FAILED"
