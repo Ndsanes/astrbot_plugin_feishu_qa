@@ -10,15 +10,26 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-from astrbot_lark_kit import (
-    AuthStatus,
-    Health,
-    RateLimiter,
-    auth_status_from_dict,
-    health_of,
-    run_lark_cli,
-    run_lark_cli_json,
-)
+try:
+    from astrbot_lark_kit import (
+        AuthStatus,
+        Health,
+        RateLimiter,
+        auth_status_from_dict,
+        health_of,
+        run_lark_cli,
+        run_lark_cli_json,
+    )
+except ImportError:  # 打包分发时 kit 以子包形式随插件提供
+    from ..astrbot_lark_kit import (  # type: ignore
+        AuthStatus,
+        Health,
+        RateLimiter,
+        auth_status_from_dict,
+        health_of,
+        run_lark_cli,
+        run_lark_cli_json,
+    )
 
 DOC_FORMAT_XML = "xml"
 DOC_FORMAT_MARKDOWN = "markdown"
@@ -95,7 +106,12 @@ class LarkAdapter:
         doc = envelope.document
         content = doc.get("content")
         if not isinstance(content, str):
-            from astrbot_lark_kit.errors import CliInvalidOutputError
+            try:
+                from astrbot_lark_kit.errors import CliInvalidOutputError
+            except ImportError:  # 打包分发时 kit 以子包形式随插件提供
+                from ..astrbot_lark_kit.errors import (  # type: ignore
+                    CliInvalidOutputError,
+                )
 
             raise CliInvalidOutputError("envelope.data.document.content 缺失")
         revision_raw = doc.get("revision_id", -1)

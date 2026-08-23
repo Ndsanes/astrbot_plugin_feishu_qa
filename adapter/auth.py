@@ -11,8 +11,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from astrbot_lark_kit import Health
-from astrbot_lark_kit import run_lark_cli_json as run_lark_cli_json_raw
+try:
+    from astrbot_lark_kit import Health
+    from astrbot_lark_kit import run_lark_cli_json as run_lark_cli_json_raw
+except ImportError:  # 打包分发时 kit 以子包形式随插件提供
+    from ..astrbot_lark_kit import Health  # type: ignore
+    from ..astrbot_lark_kit import run_lark_cli_json as run_lark_cli_json_raw  # type: ignore
 
 from .lark import REAUTH_HINT, LarkAdapter
 
