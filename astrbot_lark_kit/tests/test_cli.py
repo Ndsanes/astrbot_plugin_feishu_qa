@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from astrbot_lark_kit.cli import resolve_cli_bin, run_lark_cli
+from astrbot_lark_kit.cli import (
+    find_bundled_cli,
+    resolve_cli_bin,
+    run_lark_cli,
+    run_lark_cli_json,
+)
 from astrbot_lark_kit.envelope import parse_envelope
 from astrbot_lark_kit.errors import (
     AuthRequiredError,
@@ -116,6 +121,52 @@ class TestRunCli:
         missing = tmp_path / "absent-cli"
         with pytest.raises(CliNotFoundError):
             await run_lark_cli(["x"], bin_path=missing)
+
+
+
+class TestBundledCli:
+    def test_platform_mapping(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import astrbot_lark_kit.cli as mod
+
+        cases = [
+            ("linux", "x86_64", "linux-amd64"),
+            ("linux", "aarch64", "linux-arm64"),
+            ("darwin", "arm64", "darwin-arm64"),
+        ]
+        for sys_pf, machine, expect in cases:
+            monkeypatch.setattr(mod.sys, "platform", sys_pf)
+            monkeypatch.setattr(mod.platform, "machine", lambda m=machine: m)
+            assert mod.bundled_cli_platform() == expect
+        monkeypatch.setattr(mod.sys, "platform", "win32")
+        monkeypatch.setattr(mod.platform, "machine", lambda: "AMD64")
+        assert mod.bundled_cli_platform() is None
+
+    def test_find_bundled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import astrbot_lark_kit.cli as mod
+
+        monkeypatch.setattr(mod, "bundled_cli_platform", lambda: "linux-amd64")
+        assert find_bundled_cli(tmp_path) is None  # 目录不存在
+        bin_dir = tmp_path / "linux-amd64"
+        bin_dir.mkdir()
+        (bin_dir / "lark-cli").write_text("#!/bin/sh\n")
+        (bin_dir / "lark-cli").chmod(0o755)
+        found = find_bundled_cli(tmp_path)
+        assert found == bin_dir / "lark-cli"
+        (bin_dir / "lark-cli").chmod(0o644)  # 不可执行 → 视为缺失
+        assert find_bundled_cli(tmp_path) is None
+
+
+class TestExtraEnv:
+    async def test_extra_env_reaches_child(self, tmp_path: Path) -> None:
+        script = tmp_path / "show-home.sh"
+        script.write_text('#!/bin/sh\nprintf \'{"home":"%s"}\' "$HOME"\n')
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        obj = await run_lark_cli_json(
+            ["x"],
+            env={"LARK_CLI_PATH": str(script)},
+            extra_env={"HOME": "/custom/state"},
+        )
+        assert obj["home"] == "/custom/state"
 
 
 class TestParseEnvelope:

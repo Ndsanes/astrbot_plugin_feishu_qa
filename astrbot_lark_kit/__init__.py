@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from .auth import AuthStatus, Health, auth_status_from_dict, health_of, parse_auth_status
-from .cli import resolve_cli_bin, run_lark_cli, run_lark_cli_json
+from .cli import (
+    bundled_cli_platform,
+    find_bundled_cli,
+    resolve_cli_bin,
+    run_lark_cli,
+    run_lark_cli_json,
+)
 from .envelope import LarkCliErrorInfo, LarkEnvelope, parse_envelope
 from .errors import (
     AuthRequiredError,
@@ -31,6 +37,8 @@ __all__ = [
     "RateLimiter",
     "__version__",
     "auth_status_from_dict",
+    "bundled_cli_platform",
+    "find_bundled_cli",
     "health_of",
     "parse_auth_status",
     "parse_envelope",

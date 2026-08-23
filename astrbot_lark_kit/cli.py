@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import platform
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,33 @@ from .rate_limit import RateLimiter
 
 DEFAULT_TIMEOUT_S = 30.0
 
+
+
+
+BUNDLED_DIRNAME = "vendor/lark-cli"
+_ARCH_MAP = {"x86_64": "amd64", "amd64": "amd64", "arm64": "arm64", "aarch64": "arm64"}
+
+
+def bundled_cli_platform() -> str | None:
+    """当前平台的 vendored 子目录名(linux-amd64 等);未知平台返回 None。"""
+    machine = _ARCH_MAP.get(platform.machine().lower())
+    if machine is None or sys.platform not in ("linux", "darwin"):
+        return None
+    return f"{sys.platform}-{machine}"
+
+
+def find_bundled_cli(vendor_dir: Path) -> Path | None:
+    """在插件携带目录里找平台匹配的 lark-cli;缺失或不可执行返回 None。
+
+    目录布局: <vendor_dir>/<platform>/lark-cli (由打包脚本下载官方 release)。
+    """
+    plat = bundled_cli_platform()
+    if plat is None:
+        return None
+    candidate = vendor_dir / plat / "lark-cli"
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return candidate
+    return None
 
 def resolve_cli_bin(env: dict[str, str] | None = None) -> Path:
     """解析 lark-cli 二进制路径。
@@ -66,8 +95,10 @@ async def _spawn(
     timeout_s: float,
     *,
     cwd: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[bytes, bytes]:
     """spawn 并回收输出;非零退出抛 CliExecutionError。"""
+    child_env = {**os.environ, **extra_env} if extra_env else None
     try:
         proc = await asyncio.create_subprocess_exec(
             str(binary),
@@ -75,6 +106,7 @@ async def _spawn(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=child_env,
         )
     except (FileNotFoundError, PermissionError, NotADirectoryError) as exc:
         raise CliNotFoundError(f"无法启动 lark-cli: {exc}") from exc
@@ -104,6 +136,7 @@ async def run_lark_cli(
     env: dict[str, str] | None = None,
     bin_path: Path | None = None,
     cwd: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> LarkEnvelope:
     """spawn lark-cli 并返回解析后的 envelope(envelope 形态命令)。
 
@@ -118,7 +151,7 @@ async def run_lark_cli(
     if limiter is not None:
         await limiter.acquire()
 
-    stdout, _ = await _spawn(args, binary, timeout_s, cwd=cwd)
+    stdout, _ = await _spawn(args, binary, timeout_s, cwd=cwd, extra_env=extra_env)
     envelope = parse_envelope(stdout.decode("utf-8", errors="replace"))
     if not envelope.ok:
         raise _classify_failure(envelope)
@@ -133,13 +166,14 @@ async def run_lark_cli_json(
     env: dict[str, str] | None = None,
     bin_path: Path | None = None,
     cwd: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """spawn lark-cli 并解析裸 JSON 输出(auth status 等非 envelope 命令)。"""
     binary = bin_path or resolve_cli_bin(env=env)
     if limiter is not None:
         await limiter.acquire()
 
-    stdout, _ = await _spawn(args, binary, timeout_s, cwd=cwd)
+    stdout, _ = await _spawn(args, binary, timeout_s, cwd=cwd, extra_env=extra_env)
     try:
         obj = json.loads(stdout.decode("utf-8", errors="replace"))
     except json.JSONDecodeError as exc:

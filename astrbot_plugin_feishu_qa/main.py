@@ -49,7 +49,11 @@ class FeishuQaPlugin(Star):
         self.data_root = Path(StarTools.get_data_dir(PLUGIN_NAME))
         self.store = SnapshotStore(self.data_root)
 
-        self.adapter = LarkAdapter(doc_ref=self._cfg("WIKI_URL") or DEFAULT_WIKI_URL)
+        # 登录态落盘:插件数据目录下的 lark_cli_home(随 data 卷持久化)
+        self.adapter = LarkAdapter(
+            doc_ref=self._cfg("WIKI_URL") or DEFAULT_WIKI_URL,
+            state_home=self.data_root / "lark_cli_home",
+        )
         self.keeper = AuthKeeper(
             self.adapter, warning_hours=float(self._cfg("AUTH_WARNING_HOURS", 48))
         )
@@ -186,23 +190,21 @@ class FeishuQaPlugin(Star):
         )
         import astrbot.api.message_components  # noqa: F401 确保包可用
 
-        proc = await asyncio.create_subprocess_exec(
-            "lark-cli",
-            "im",
-            "+messages-send",
-            "--as",
-            "bot",
-            "--user-id",
-            admin_open_id,
-            "--msg-type",
-            "interactive",
-            "--content",
-            json.dumps(card, ensure_ascii=False),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        returncode, stdout = await self.adapter.run_raw(
+            [
+                "im",
+                "+messages-send",
+                "--as",
+                "bot",
+                "--user-id",
+                admin_open_id,
+                "--msg-type",
+                "interactive",
+                "--content",
+                json.dumps(card, ensure_ascii=False),
+            ],
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        sent_ok = proc.returncode == 0 and b'"ok": true' in stdout
+        sent_ok = returncode == 0 and b'"ok": true' in stdout
         logger.info(
             "[FeishuQA] 授权卡片推送%s {message=%s}",
             "成功" if sent_ok else "失败",
@@ -376,6 +378,39 @@ class FeishuQaPlugin(Star):
             return
         ok = self._load_corpus()
         yield event.plain_result("语料已重新加载" if ok else "语料加载失败")
+
+    @filter.command("qa_auth_login")
+    async def qa_auth_login(self, event: AstrMessageEvent):
+        """/qa_auth_login:发起 Device Flow 扫码授权(管理员)。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可用")
+            return
+        from astrbot_plugin_feishu_qa.adapter.auth import (
+            initiate_reauth_flow,
+            poll_auth_completion,
+        )
+
+        if self._poll_task is not None and not self._poll_task.done():
+            yield event.plain_result("已有授权流程进行中,请先完成或稍后再试")
+            return
+
+        initiated = await initiate_reauth_flow(self.adapter)
+        if not initiated:
+            yield event.plain_result("发起授权失败,请查看服务端日志")
+            return
+
+        expires_in = int(initiated.get("expires_in") or 600)
+        url = initiated["verification_url"]
+        yield event.plain_result(
+            f"请在 {max(1, expires_in // 60)} 分钟内打开链接并扫码/确认授权:\n{url}\n"
+            "完成后发送 /qa_status 确认登录态。"
+        )
+
+        async def _poll() -> None:
+            ok = await poll_auth_completion(self.adapter, initiated["device_code"])
+            logger.info("[FeishuQA] 授权流程%s", "已完成" if ok else "超时未完成")
+
+        self._poll_task = asyncio.create_task(_poll())
 
     @filter.command("learn")
     async def learn(self, event: AstrMessageEvent):

@@ -88,7 +88,7 @@ No build step exists; packages run from source.
 ## Runtime/Tooling Preferences
 
 - Plain Python 3.12+; **no third-party pip dependencies** (spec §0.14 minimal-dependency principle). `requirements.txt` is intentionally empty of packages — `lark-kit` is consumed as sibling source via `pythonpath = ["."]`.
-- External runtime dependency is the `lark-cli` binary (resolved via PATH by `resolve_cli_bin`); users must be logged in (`lark-cli auth login`).
+- `lark-cli` is **carried by the plugin**: packaging script downloads official release binaries (linux-amd64/arm64, sha256-verified) into `vendor/lark-cli/<platform>/`. Resolution order: explicit `bin_path` injection (tests) → vendored binary → `LARK_CLI_PATH` env → PATH. Auth state is redirected via subprocess `HOME` into `<plugin data>/lark_cli_home/` so login survives container rebuilds; admins authorize headlessly with `/qa_auth_login` or the auto-pushed re-auth card.
 - No lockfile, no package manager beyond pip; do not add dependencies without strong justification.
 
 ## Testing & QA
