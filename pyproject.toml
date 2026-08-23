@@ -13,6 +13,10 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["SIM108"]
 
 [tool.pytest.ini_options]
-testpaths = ["astrbot_lark_kit/tests", "astrbot_plugin_feishu_qa/tests"]
+testpaths = [
+  "astrbot_lark_kit/tests",
+  "astrbot_plugin_lark_cli_platform/tests",
+  "astrbot_plugin_feishu_qa/tests",
+]
 asyncio_mode = "auto"
 pythonpath = ["."]

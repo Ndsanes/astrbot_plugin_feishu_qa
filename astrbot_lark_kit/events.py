@@ -16,6 +16,7 @@ cancel 时子进程终止并等待,不留孤儿进程。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from collections.abc import AsyncIterator
@@ -165,10 +166,8 @@ class EventStream:
         if proc is None:
             return
         if proc.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.terminate()
-            except ProcessLookupError:
-                pass
         try:
             await asyncio.wait_for(proc.wait(), timeout=10)
         except TimeoutError:

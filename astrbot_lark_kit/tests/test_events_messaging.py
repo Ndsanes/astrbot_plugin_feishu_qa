@@ -76,7 +76,7 @@ def test_归一化_id回退兼容():
 
 def make_fake_cli(tmp_path: Path, lines: list[str], *, exit_code: int = 0) -> Path:
     script = tmp_path / f"fakecli_{abs(hash(tuple(lines)))}.py"
-    body = "\n".join(f'print({json.dumps(l)})' for l in lines)
+    body = "\n".join(f"print({json.dumps(line)})" for line in lines)
     script.write_text(
         "#!/usr/bin/env python3\n"
         f"import sys\n{body}\nsys.exit({exit_code})\n"
@@ -106,10 +106,15 @@ async def test_stream_产出归一化消息并过滤bot自消息(tmp_path):
     assert [m.message_id for m in got] == ["om_1", "om_2"]
 
 
+async def _drain(agen):
+    async for _ in agen:
+        pass
+
+
 @pytest.mark.asyncio
 async def test_stream_cancel终止子进程无孤儿(tmp_path):
-    lines = [json.dumps(SAMPLE)] + [
-        json.dumps({**SAMPLE, "message_id": f"om_{i}"}) for i in range(50)
+    lines = [json.dumps(SAMPLE)] + [""] * 1 + [
+        json.dumps(SAMPLE).replace("om_1", f"om_{i}") for i in range(50)
     ]
     st = stream_of(make_fake_cli(tmp_path, lines))
     agen = st.stream()
@@ -127,49 +132,6 @@ async def test_stream_cancel终止子进程无孤儿(tmp_path):
 async def _drain(agen):
     async for _ in agen:
         pass
-
-
-@pytest.mark.asyncio
-async def test_dedup_同一消息id只产出一次(tmp_path):
-    dup_lines = [json.dumps(SAMPLE)] * 3
-    got = []
-    agen = stream_of(make_fake_cli(tmp_path, dup_lines)).stream()
-    async for msg in agen:
-        got.append(msg)
-        break
-    await agen.aclose()
-    assert len(got) == 1
-
-
-@pytest.mark.asyncio
-async def test_stream_cancel终止子进程无孤儿(tmp_path):
-    lines = [json.dumps(SAMPLE)] + [""] * 1 + [json.dumps(SAMPLE).replace("om_1", f"om_{i}") for i in range(50)]
-    st = stream_of(make_fake_cli(tmp_path, lines))
-    agen = st.stream()
-    got = await agen.__anext__()
-    assert got.message_id == "om_1"
-    task = asyncio.create_task(_drain(agen))
-    await asyncio.sleep(0.05)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    await asyncio.sleep(0.05)
-    assert st._proc is None or st._proc.returncode is not None
-
-
-async def _drain(agen):
-    async for _ in agen:
-        pass
-
-
-@pytest.mark.asyncio
-async def test_dedup_同一消息id只产出一次(tmp_path):
-    dup_lines = [json.dumps(SAMPLE)] * 3
-    got = [
-        m
-        async for m in stream_of(make_fake_cli(tmp_path, dup_lines)).stream()
-    ]
-    assert len(got) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -197,6 +159,13 @@ class CapturingMessenger(LarkMessenger):
 @pytest.mark.asyncio
 async def test_send_text_chat_target使用bot身份():
     m = CapturingMessenger()
+    await m.send_text("oc_chat1", "hi")
+    args = m.sent[0]
+    assert args[args.index("--as") + 1] == "bot"
+    assert args[args.index("--chat-id") + 1] == "oc_chat1"
+    assert args[args.index("--text") + 1] == "hi"
+
+
 @pytest.mark.asyncio
 async def test_dedup_同一消息id只产出一次(tmp_path):
     dup_lines = [json.dumps(SAMPLE)] * 3
@@ -204,8 +173,8 @@ async def test_dedup_同一消息id只产出一次(tmp_path):
     agen = stream_of(make_fake_cli(tmp_path, dup_lines)).stream()
     async for msg in agen:
         got.append(msg.message_id)
-        break  # 首条即停,重复行由去重层拦截
-    await agen.aclose()
+        await agen.aclose()  # 首条即停,重复行由去重层拦截
+        break
     assert got == ["om_1"]
 
 @pytest.mark.asyncio

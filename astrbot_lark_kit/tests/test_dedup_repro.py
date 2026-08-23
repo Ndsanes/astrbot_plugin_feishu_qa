@@ -11,7 +11,7 @@ SAMPLE = {"type":"im.message.receive_v1","message_id":"om_1","sender_id":"ou_1",
 def make_fake(tmp_path):
     script = tmp_path / "fake.py"
     dup = [json.dumps(SAMPLE)]*3
-    body = "\n".join(f'print({json.dumps(l)})' for l in dup)
+    body = "\n".join(f"print({json.dumps(line)})" for line in dup)
     script.write_text("#!/usr/bin/env python3\nimport sys\n"+body+"\n")
     script.chmod(0o755)
     return script
