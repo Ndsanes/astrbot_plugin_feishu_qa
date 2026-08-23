@@ -4,5 +4,6 @@
   "wiki_token": "O9fcwP1PviPuOSkGBekc7B7xn4c",
   "source_url": "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c",
   "captured_at": "2026-08-22T21:22:00+08:00",
-  "note": "revision 基线快照;数字仅作验收基准,业务逻辑不得写死"
+  "note": "revision 基线快照;数字仅作验收基准,业务逻辑不得写死",
+  "r8394_note": "UP主更新后的第二基线,用于跨 revision ID 稳定性验证"
 }

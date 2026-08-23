@@ -68,8 +68,10 @@ class FeishuQaPlugin(Star):
         self._load_corpus()
 
         self._pending_learn: dict[str, dict] = {}  # user_id -> candidate
+        self._pending_learn: dict[str, dict] = {}
         self._sync_task: asyncio.Task | None = None
         self._auth_task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task | None = None
 
     # ── 配置 ──
 
@@ -130,7 +132,7 @@ class FeishuQaPlugin(Star):
             self._auth_task = asyncio.create_task(self._auth_loop())
 
     async def terminate(self) -> None:
-        for task in (self._sync_task, self._auth_task):
+        for task in (self._sync_task, self._auth_task, getattr(self, "_poll_task", None)):
             if task:
                 task.cancel()
 
@@ -153,8 +155,8 @@ class FeishuQaPlugin(Star):
         interval = int(self._cfg("AUTH_CHECK_HOURS", 12)) * 3600
 
         async def notify(message: str) -> None:
-            # v1:记录日志;/qa_status 可查。推送渠道后续接入 bot 身份 IM。
             logger.warning("[FeishuQA][AUTH] %s", message)
+            await self._send_reauth_card(message)
 
         while True:
             try:
@@ -166,6 +168,64 @@ class FeishuQaPlugin(Star):
             except Exception as exc:
                 logger.warning("[FeishuQA] auth 检查异常: %s", exc)
             await asyncio.sleep(interval)
+
+    async def _send_reauth_card(self, reason: str) -> bool:
+        """发起 Device Flow 并以 bot 身份推交互式卡片(一键授权按钮)。"""
+        admin_open_id = str(self._cfg("ADMIN_OPEN_ID", "") or "")
+        if not admin_open_id:
+            logger.info("[FeishuQA] 未配置 ADMIN_OPEN_ID,跳过卡片推送")
+            return False
+
+        from astrbot_plugin_feishu_qa.adapter.auth import (
+            build_auth_card,
+            initiate_reauth_flow,
+            poll_auth_completion,
+        )
+
+        initiated = await initiate_reauth_flow(self.adapter)
+        if not initiated:
+            return False
+
+        expires_in = int(initiated.get("expires_in") or 600)
+        card = build_auth_card(
+            initiated["verification_url"],
+            expires_in_min=max(1, expires_in // 60),
+            reason=reason.split("\n")[0],
+        )
+        import astrbot.api.message_components  # noqa: F401 确保包可用
+
+        proc = await asyncio.create_subprocess_exec(
+            "lark-cli",
+            "im",
+            "+messages-send",
+            "--as",
+            "bot",
+            "--user-id",
+            admin_open_id,
+            "--msg-type",
+            "interactive",
+            "--content",
+            json.dumps(card, ensure_ascii=False),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        sent_ok = proc.returncode == 0 and b'"ok": true' in stdout
+        logger.info(
+            "[FeishuQA] 授权卡片推送%s {message=%s}",
+            "成功" if sent_ok else "失败",
+            stdout[:120],
+        )
+        if not sent_ok:
+            return False
+
+        # 后台轮询等管理员点击完成;成功即恢复同步能力
+        async def _poll() -> None:
+            ok = await poll_auth_completion(self.adapter, initiated["device_code"])
+            logger.info("[FeishuQA] 授权流程%s", "已完成" if ok else "超时未完成")
+
+        self._poll_task = asyncio.create_task(_poll())
+        return True
 
     async def sync_once(self) -> dict:
         """抓取→解析→下载缺失图→原子提交→热替换检索器。"""

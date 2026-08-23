@@ -55,7 +55,12 @@ class LarkAdapter:
         self._timeout_s = timeout_s
         self._env = env
         self._bin_path = bin_path
+        # 供 re-auth 等旁路调用复用同一测试注入通道
+        self.env = env
+        self.bin_path = bin_path
         self._limiter = RateLimiter(rate=rate)
+        self.timeout_s = timeout_s
+        self.limiter = self._limiter
 
     async def _run(
         self, args: list[str], *, timeout_s: float | None = None, cwd: str | None = None
