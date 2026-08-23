@@ -70,6 +70,7 @@ class LarkCliPlatform(Platform):
         return PlatformMetadata("lark_cli", "lark-cli 平台适配器")
 
     async def run(self):
+        logger.info("[lark_cli] 平台适配器启动中(1/4:数据目录)")
         data_dir = StarTools.get_data_dir("astrbot_plugin_lark_cli_platform")
         home_cfg = str(self.config.get("lark_cli_home") or "").strip()
         state_home = Path(home_cfg) if home_cfg else resolve_state_home(data_dir)
@@ -77,9 +78,11 @@ class LarkCliPlatform(Platform):
         binary = await self._aresolve_binary()
         if binary is None:
             return
+        logger.info("[lark_cli] 启动(3/4):二进制就绪 %s", binary)
 
         self._messenger = LarkMessenger(binary=binary)
         self._stream = EventStream(binary=binary, state_home=state_home)
+        logger.info("[lark_cli] 启动(4/4):事件消费进程拉起中...")
         async for msg in self._stream.stream():
             if not self._chat_enabled(msg.chat_id, msg.chat_type):
                 continue
