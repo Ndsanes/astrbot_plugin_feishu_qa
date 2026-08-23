@@ -304,6 +304,15 @@ class FeishuQaPlugin(Star):
             return
         plan = router.route(question, group_id=group_id)
         if plan.kind == "denied":
+            # 管理员可见诊断:便于排查群号/平台形态问题;普通用户保持零响应
+            if self._is_admin(event):
+                platform_name = ""
+                with contextlib.suppress(Exception):
+                    platform_name = str(event.get_platform_name() or "")
+                yield event.plain_result(
+                    f"[FeishuQA] 当前会话不在白名单,已忽略。"
+                    f"platform={platform_name} group_id={group_id!r}"
+                )
             event.stop_event()
             return
         if plan.kind == "direct" and plan.direct:
