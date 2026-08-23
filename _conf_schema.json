@@ -72,5 +72,15 @@
     "description": "/learn 分析的最近消息条数上限",
     "type": "int",
     "default": 50
+  },
+  "FEISHU_APP_ID": {
+    "description": "飞书应用 App ID(可选;填写后插件自动完成 lark-cli config init,无需手动配置)",
+    "type": "string",
+    "default": ""
+  },
+  "FEISHU_APP_SECRET": {
+    "description": "飞书应用 App Secret(与上面的 App ID 配套)",
+    "type": "string",
+    "default": ""
   }
 }
