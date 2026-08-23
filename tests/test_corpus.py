@@ -13,7 +13,11 @@ from astrbot_plugin_feishu_qa.corpus.builder import (
     diff_manifests,
     manifest_content_hash,
 )
-from astrbot_plugin_feishu_qa.corpus.model import derive_entry_id, extract_symptom_tags
+from astrbot_plugin_feishu_qa.corpus.model import (
+    derive_entry_id,
+    extract_symptom_tags,
+    normalize_title,
+)
 from astrbot_plugin_feishu_qa.corpus.parser import parse_xml
 from astrbot_plugin_feishu_qa.storage.snapshot import SnapshotStore
 
@@ -45,10 +49,19 @@ class TestParserRealFixture:
         assert "【" not in sample.title  # 标题正文不含标签壳
         assert sample.raw_title.startswith("1、") or "【" in sample.raw_title
 
-    def test_stable_block_ids_as_locator(self, parsed) -> None:
+    def test_locator_kept_as_metadata_id_content_derived(self, parsed) -> None:
         for entry in parsed.entries:
             assert entry.source_locator, "真实文档每个标题都有块 ID"
-            assert entry.id == f"qa_{entry.source_locator}"
+            # 实测块 ID 跨 revision 漂移,ID 必须内容派生而非块 ID
+            assert not entry.id.endswith(entry.source_locator)
+            assert entry.id.startswith("qa_")
+
+    def test_ids_stable_within_revision(self, real_xml: str) -> None:
+        again = parse_xml(real_xml, source_revision=8268)
+        old = parse_xml(real_xml, source_revision=8268)
+        ids1 = {normalize_title(e.raw_title): e.id for e in old.entries}
+        for e in again.entries:
+            assert ids1[normalize_title(e.raw_title)] == e.id
 
     def test_multi_image_binding(self, parsed) -> None:
         multi = [e for e in parsed.entries if len(e.images) >= 2]
@@ -96,11 +109,13 @@ class TestParserEdgeCases:
         assert result.entries[0].body == ""
         assert result.diagnostics
 
-    def test_repeated_titles_get_distinct_ids_without_block_id(self) -> None:
-        tags1, title1 = extract_symptom_tags("重复")
-        a = derive_entry_id(["x"], title1, "")
-        b = derive_entry_id(["y"], title1, "")
+    def test_repeated_titles_in_different_sections_distinct(self) -> None:
+        _, title = extract_symptom_tags("重复")
+        a = derive_entry_id(["一、宿主"], title, "")
+        b = derive_entry_id(["二、音源"], title, "")
         assert a != b
+        # 同章节重复标题视为同一身份(内容相同即重复)
+        assert a == derive_entry_id(["一、宿主"], title, "")
 
     def test_invalid_xml_raises_value_error(self) -> None:
         with pytest.raises(ValueError):
@@ -160,3 +175,36 @@ class TestSnapshotStore:
         with contextlib.suppress(TypeError):
             store.commit(bad_manifest)
         assert store.load()["revision_id"] == 100
+
+
+class TestCrossRevisionStability:
+    """r8268 vs r8394 真实双基线:块 ID 漂移下内容派生 ID 必须稳定。"""
+
+    def test_same_title_entries_share_id_across_revisions(self) -> None:
+        old = parse_xml(
+            (FIXTURES / "qa_r8268.xml").read_text(), source_revision=8268
+        )
+        new = parse_xml(
+            (FIXTURES / "qa_r8394.xml").read_text(), source_revision=8394
+        )
+        old_by_norm = {normalize_title(e.raw_title): e.id for e in old.entries}
+        stable = sum(
+            1
+            for e in new.entries
+            if old_by_norm.get(normalize_title(e.raw_title)) == e.id
+        )
+        assert stable >= 40, f"跨 revision ID 稳定数不足: {stable}"
+
+    def test_real_incremental_diff_detects_new_entry(self) -> None:
+        old_m = build_manifest(
+            parse_xml((FIXTURES / "qa_r8268.xml").read_text(), source_revision=8268),
+            revision_id=8268,
+            document_id="d",
+        )
+        new_m = build_manifest(
+            parse_xml((FIXTURES / "qa_r8394.xml").read_text(), source_revision=8394),
+            revision_id=8394,
+            document_id="d",
+        )
+        diff = diff_manifests(old_m, new_m)
+        assert diff["added"] == 1 and diff["removed"] == 0 and diff["changed"]

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from astrbot_lark_kit import Health
+from astrbot_lark_kit import run_lark_cli_json as run_lark_cli_json_raw
 
 from .lark import REAUTH_HINT, LarkAdapter
 
@@ -96,3 +97,89 @@ class AuthKeeper:
         if health is Health.UNAVAILABLE:
             return f"[飞书QA] 无法确认登录态(CLI 缺失或调用失败)。\n{REAUTH_HINT}"
         return f"[飞书QA] 登录态异常: {health.value}"
+
+
+# ── 一键重登(spec 与 Modu feishu-auth 同构)──
+
+
+def build_auth_card(
+    verification_url: str,
+    *,
+    expires_in_min: int = 10,
+    reason: str = "",
+) -> dict:
+    """构建重授权交互卡片(Card 2.0,与 Modu 生产版同构)。"""
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "fill"},
+        "header": {
+            "title": {"tag": "plain_text", "content": "飞书QA 授权"},
+            "template": "orange",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "\n".join(
+                        [
+                            "**文档同步需要重新授权**",
+                            "",
+                            f"触发原因:{reason}",
+                            f"请在 {expires_in_min} 分钟内完成,超时需重新触发",
+                        ]
+                    ),
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "点击授权"},
+                    "type": "primary",
+                    "width": "fill",
+                    "behaviors": [{"type": "open_url", "default_url": verification_url}],
+                },
+            ]
+        },
+    }
+
+
+async def initiate_reauth_flow(
+    adapter: LarkAdapter, *, domain: str = "docs"
+) -> dict | None:
+    """发起 Device Flow(非阻塞),返回 {device_code, verification_url, expires_in}。
+
+    失败返回 None。
+    """
+    try:
+        obj = await run_lark_cli_json_raw(
+            ["auth", "login", "--domain", domain, "--no-wait", "--json"],
+            timeout_s=adapter.timeout_s,
+            limiter=adapter.limiter,
+            env=adapter.env,
+            bin_path=adapter.bin_path,
+        )
+    except Exception as exc:
+        logger.warning("[AuthKeeper] 发起授权失败: %s", exc)
+        return None
+    if not obj.get("device_code") or not obj.get("verification_url"):
+        logger.warning("[AuthKeeper] 授权响应缺字段: %s", list(obj))
+        return None
+    return obj
+
+
+async def poll_auth_completion(
+    adapter: LarkAdapter, device_code: str, *, timeout_s: float = 660.0
+) -> bool:
+    """阻塞轮询直到管理员完成授权或超时。返回是否成功。"""
+    import asyncio as _asyncio
+
+    try:
+        await _asyncio.wait_for(
+            run_lark_cli_json_raw(
+                ["auth", "login", "--device-code", device_code, "--json"],
+                timeout_s=timeout_s,
+                limiter=adapter.limiter,
+            ),
+            timeout=timeout_s,
+        )
+        return True
+    except Exception:
+        return False

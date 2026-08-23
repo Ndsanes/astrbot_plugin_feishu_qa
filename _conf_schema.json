@@ -19,6 +19,12 @@
     "hint": "可使用 /qa_sync /qa_reload /learn 等管理指令",
     "default": []
   },
+  "ADMIN_OPEN_ID": {
+    "description": "管理员飞书 open_id(登录态失效时推送授权卡片)",
+    "type": "string",
+    "hint": "ou_xxx 开头;lark-cli auth status 可查",
+    "default": ""
+  },
   "SYNC_INTERVAL_HOURS": {
     "description": "自动同步间隔(小时)",
     "type": "int",
