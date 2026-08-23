@@ -62,6 +62,19 @@ WebUI 手动上传 txt 则被 RecursiveCharacter(500c/100o) 二次切片,
 breadcrumb 仅存于首片——推荐配置 chunk_size ≥ 1200 字符。
 当前 API key 无 KB scope,在线检索验证 pending manual upload(§59 如实标注)。
 
+## 9.5 Online verification(真实 AstrBot 检索)
+
+语料已导入线上知识库 "Cakewalk sonar"(替换指向,旧库改名保留未删),
+通过 `POST /knowledge-bases/{kb}/retrieve`(bge-m3 dense + sparse + Qwen3-Reranker)
+对同一 43 query 集实测:
+
+| R@1 | R@3 | R@5 | MRR@5 | FP@3 |
+|---|---|---|---|---|
+| 0.5526 | 0.7632 | 0.8684 | 0.6697 | 0/5 |
+
+对比离线 sparse 代理(Breadcrumb R@5=0.579):真实混合检索把 R@5 推到 0.868。
+模糊中文问题抽查均命中相关章节(导出音频→Exporting audio, 录音延迟→Audio Sync)。
+
 ## 10. Limitations
 
 - benchmark 用 BM25-lite sparse 代理,未含真实 dense/rerank 路径;
