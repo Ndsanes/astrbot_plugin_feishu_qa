@@ -114,7 +114,7 @@ def ensure_bundled_cli(
 
     needed: list[tuple[str, Path]] = []
     for plat in plats:
-        plat_dir = vendor_dir / "lark-cli" / plat
+        plat_dir = vendor_dir / plat
         binary = plat_dir / "lark-cli"
         if (
             binary.is_file()

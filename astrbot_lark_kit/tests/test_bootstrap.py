@@ -70,10 +70,10 @@ def test_正常下载并落盘(tmp_path: Path):
         version=VERSION,
         fetch=make_fetcher({"linux-amd64": make_tar_bytes()}),
     )
-    binary = tmp_path / "lark-cli" / "linux-amd64" / "lark-cli"
+    binary = tmp_path / "linux-amd64" / "lark-cli"
     assert installed == {"linux-amd64": binary}
     assert binary.is_file() and binary.stat().st_size > 0
-    assert (tmp_path / "lark-cli" / "linux-amd64" / ".cli_version").read_text() == VERSION
+    assert (tmp_path / "linux-amd64" / ".cli_version").read_text() == VERSION
 
 
 def test_sha256校验失败抛错且不留半成品(tmp_path: Path):
@@ -89,7 +89,7 @@ def test_sha256校验失败抛错且不留半成品(tmp_path: Path):
         ensure_bundled_cli(
             tmp_path, platforms=("linux-amd64",), version=VERSION, fetch=fetch
         )
-    assert not (tmp_path / "lark-cli" / "linux-amd64" / "lark-cli").exists()
+    assert not (tmp_path / "linux-amd64" / "lark-cli").exists()
 
 
 def test_archive缺目标文件报错(tmp_path: Path):
@@ -128,10 +128,9 @@ def test路径穿越与绝对路径成员被免疫(tmp_path: Path):
     )
     binary = installed["linux-amd64"]
     assert binary.read_bytes() == b"ok"
-    plat_dir = tmp_path / "lark-cli" / "linux-amd64"
+    plat_dir = tmp_path / "linux-amd64"
     assert sorted(p.name for p in plat_dir.iterdir()) == [".cli_version", "lark-cli"]
-    assert not (tmp_path / "evil.sh").exists()
-    assert not (tmp_path.parent / "evil.sh").exists()
+    assert not (tmp_path / "evil.sh").exists() and not (tmp_path.parent / "evil.sh").exists()
 
 
 def test符号链接成员被忽略仍能取到真身(tmp_path: Path):
@@ -168,7 +167,7 @@ def test幂等跳过_已存在且版本一致(tmp_path: Path):
 
 
 def test二进制存在但版本标记缺失时重新下载(tmp_path: Path):
-    binary = tmp_path / "lark-cli" / "linux-amd64" / "lark-cli"
+    binary = tmp_path / "linux-amd64" / "lark-cli"
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b"stale-but-nonempty")
 
@@ -204,7 +203,7 @@ def test版本变化触发重新下载(tmp_path: Path):
         tmp_path, platforms=("linux-amd64",), version=other, fetch=fetch
     )
     assert installed["linux-amd64"].read_bytes() == b"v87"
-    assert (tmp_path / "lark-cli" / "linux-amd64" / ".cli_version").read_text() == other
+    assert (tmp_path / "linux-amd64" / ".cli_version").read_text() == other
 
 
 def test不支持的平台明确拒绝():

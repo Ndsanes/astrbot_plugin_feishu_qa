@@ -26,8 +26,8 @@ from astrbot.core.star.star_tools import StarTools
 
 try:  # 优先使用插件内 vendored 副本(与打包版本严格一致),缺失再退回安装版
     from .astrbot_lark_kit import (
-        CliNotFoundError,
         DEFAULT_CLI_VERSION,
+        CliNotFoundError,
         EventStream,
         LarkMessenger,
         NormalizedLarkMessage,
@@ -39,8 +39,8 @@ try:  # 优先使用插件内 vendored 副本(与打包版本严格一致),缺�
     )
 except ImportError:  # 开发环境:工作区源码或 pip 安装版
     from astrbot_lark_kit import (
-        CliNotFoundError,
         DEFAULT_CLI_VERSION,
+        CliNotFoundError,
         EventStream,
         LarkMessenger,
         NormalizedLarkMessage,
@@ -95,11 +95,14 @@ class LarkCliPlatform(Platform):
             await self.handle_msg(abm, msg.chat_id)
     def _repair_bundled_binary(self) -> None:
         """解压器可能丢失可执行位/版本标记缺失:启动时就地修复(离线安全)。"""
+        logger.info(f"[lark_cli][dbg] vendor={VENDOR_DIR} exists={VENDOR_DIR.exists()}")
         plat = bundled_cli_platform()
+        logger.info(f"[lark_cli][dbg] plat={plat}")
         if not plat:
             return
-        plat_dir = VENDOR_DIR / "lark-cli" / plat
+        plat_dir = VENDOR_DIR / plat
         binary = plat_dir / "lark-cli"
+        logger.info(f"[lark_cli][dbg] probe={binary} exists={binary.is_file()}")
         if not (binary.is_file() and binary.stat().st_size > 0):
             return
         try:
