@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import stat as stat_mod
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,7 @@ try:
         Health,
         RateLimiter,
         auth_status_from_dict,
+        bundled_cli_platform,
         find_bundled_cli,
         health_of,
         resolve_cli_bin,
@@ -29,6 +31,7 @@ except ImportError:  # 打包分发时 kit 以子包形式随插件提供
         Health,
         RateLimiter,
         auth_status_from_dict,
+        bundled_cli_platform,
         find_bundled_cli,
         health_of,
         resolve_cli_bin,
@@ -58,6 +61,40 @@ class LarkAdapter:
     通知通过注入的回调完成(插件层接到 bot 身份 IM 或 AstrBot 消息)。
     """
 
+    def _resolve_bundled(self) -> Path | None:
+        """解析携带二进制;存在但不可执行时尝试补权限位后重试。"""
+        found = find_bundled_cli(self._vendor_dir)
+        if found is not None:
+            return found
+        if self._bundled_platform is None:
+            return None
+        candidate = self._vendor_dir / self._bundled_platform / "lark-cli"
+        if not candidate.is_file():
+            return None
+        try:  # 解压/挂载可能丢掉可执行位
+            candidate.chmod(candidate.stat().st_mode | stat_mod.S_IEXEC)
+        except OSError:
+            return None
+        if os.access(candidate, os.X_OK):
+            return candidate
+        return None
+
+    def cli_diagnostics(self) -> str:
+        """人读的 CLI 解析报告(供 /qa_status 展示)。"""
+        binary = self._bin_path or find_bundled_cli(self._vendor_dir)
+        if self._injected_bin is not None:
+            source = "注入"
+        else:
+            source = "携带" if binary else "未找到"
+        plat = self._bundled_platform or "未知平台"
+        if binary:
+            return f"CLI={source} platform={plat} path={binary}"
+        candidate = (
+            self._vendor_dir / plat / "lark-cli" if self._bundled_platform else None
+        )
+        detail = f"存在={candidate.is_file() if candidate else False}"
+        return f"CLI=未找到 platform={plat} vendor_dir={self._vendor_dir} {detail}"
+
     def __init__(
         self,
         *,
@@ -71,9 +108,11 @@ class LarkAdapter:
         self.doc_ref = doc_ref
         self._timeout_s = timeout_s
         self._env = env
+        self._injected_bin = bin_path
         # 二进制优先级:显式注入 > 插件携带(vendor/lark-cli/<平台>/) > PATH。
-        bundled = find_bundled_cli(Path(__file__).resolve().parents[1] / "vendor" / "lark-cli")
-        self._bin_path = bin_path or bundled
+        self._vendor_dir = Path(__file__).resolve().parents[1] / "vendor" / "lark-cli"
+        self._bundled_platform = bundled_cli_platform()
+        self._bin_path = bin_path or self._resolve_bundled()
         # 登录态落盘目录:重定向 HOME,使 auth 凭据随插件数据持久化(容器友好)。
         self._extra_env = {"HOME": str(state_home)} if state_home else None
         # 供 re-auth 等旁路调用复用同一测试注入通道

@@ -63,7 +63,7 @@ rsync -a \
 
 # 携带官方 lark-cli(linux-amd64/arm64),带 sha256 校验。
 CHECKSUMS="$TMP_DIR/checksums.txt"
-curl -fsSL "$RELEASE_BASE/checksums.txt" -o "$CHECKSUMS"
+curl -fsSL --http1.1 --retry 3 "$RELEASE_BASE/checksums.txt" -o "$CHECKSUMS"
 for plat in linux-amd64 linux-arm64; do
   archive="lark-cli-${CLI_VERSION}-${plat}.tar.gz"
   expected=$(grep " ${archive}\$" "$CHECKSUMS" | awk '{print $1}')
@@ -71,7 +71,7 @@ for plat in linux-amd64 linux-arm64; do
     echo "error: no checksum for $archive"
     exit 1
   fi
-  curl -fsSL "$RELEASE_BASE/$archive" -o "$TMP_DIR/$archive"
+  curl -fsSL --http1.1 --retry 3 "$RELEASE_BASE/$archive" -o "$TMP_DIR/$archive"
   echo "$expected  $TMP_DIR/$archive" | shasum -a 256 -c - >/dev/null
   mkdir -p "$TMP_DIR/$PLUGIN_DIR_NAME/vendor/lark-cli/$plat"
   tar -xzf "$TMP_DIR/$archive" -C "$TMP_DIR/$PLUGIN_DIR_NAME/vendor/lark-cli/$plat" lark-cli
