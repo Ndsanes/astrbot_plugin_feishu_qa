@@ -1,2 +1,2 @@
-# 运行时依赖:astrbot_lark_kit 以源码方式随插件分发(见 lark_kit/ 目录),
-# 无第三方 pip 依赖。核心原则:最少依赖(spec §0.14)。
+# 运行时依赖:astrbot_lark_kit 以源码子包形式随插件分发(打包脚本会将其
+# 复制为 astrbot_lark_kit/ 打进 zip),无第三方 pip 依赖。核心原则:最少依赖(spec §0.14)。
