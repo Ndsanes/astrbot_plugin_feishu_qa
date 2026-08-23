@@ -144,3 +144,16 @@ class TestAdminCommands:
         outs = run_handler(plugin.qa_status(event))
         text = outs[0][1]
         assert "revision: 8268" in text
+
+
+class TestMergedForwardCapability:
+    """合并转发能力探测(Phase 4):qq_official 排除,其余放行由构建失败兜底。"""
+
+    def test_qq_official_不支持合并转发(self):
+        assert FeishuQaPlugin._supports_merged_forward("qq_official") is False
+
+    def test_aiocqhttp_支持合并转发(self):
+        assert FeishuQaPlugin._supports_merged_forward("aiocqhttp") is True
+
+    def test_未知平台默认尝试构建并依赖回退(self):
+        assert FeishuQaPlugin._supports_merged_forward("unknown_platform") is True
