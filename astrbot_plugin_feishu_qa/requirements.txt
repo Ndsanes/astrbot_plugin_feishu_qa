@@ -2,4 +2,4 @@
 # 开发模式:工作区根目录的 astrbot_lark_kit/ 源码优先(pytest pythonpath=["."]),
 # 打包脚本仍会把源码复制为插件内 vendored 子包作为兜底,三层解析顺序:
 #   1) 开发环境 workspace 源码  2) pip 安装版  3) 插件 zip 内 vendored 副本
-astrbot-lark-kit @ git+https://github.com/Ndsanes/astrbot_lark_kit.git@v0.1.0
+astrbot-lark-kit @ git+https://github.com/Ndsanes/astrbot_lark_kit.git@v0.2.0

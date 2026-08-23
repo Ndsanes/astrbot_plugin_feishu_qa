@@ -26,7 +26,8 @@ from .errors import (
     LarkKitError,
     UmoParseError,
 )
-from .platforms import PlatformIdentity, resolve_platform_instance
+from .events import EventStream, NormalizedLarkMessage, normalize_event
+from .messaging import LarkMessenger
 from .rate_limit import RateLimiter
 from .state import resolve_state_home
 
@@ -41,13 +42,17 @@ __all__ = [
     "CliInvalidOutputError",
     "CliNotFoundError",
     "CliTimeoutError",
+    "EventStream",
     "Health",
     "LarkCliErrorInfo",
     "LarkEnvelope",
     "LarkKitError",
+    "LarkMessenger",
+    "NormalizedLarkMessage",
     "PlatformIdentity",
     "RateLimiter",
     "UmoParseError",
+    "normalize_event",
     "__version__",
     "auth_status_from_dict",
     "bundled_cli_download_url",
