@@ -24,16 +24,28 @@ from astrbot.api.platform import (
 from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.core.star.star_tools import StarTools
 
-from astrbot_lark_kit import (
-    CliNotFoundError,
-    EventStream,
-    LarkMessenger,
-    NormalizedLarkMessage,
-    ensure_bundled_cli,
-    find_bundled_cli,
-    resolve_cli_bin,
-    resolve_state_home,
-)
+try:  # 优先使用插件内 vendored 副本(与打包版本严格一致),缺失再退回安装版
+    from .astrbot_lark_kit import (
+        CliNotFoundError,
+        EventStream,
+        LarkMessenger,
+        NormalizedLarkMessage,
+        ensure_bundled_cli,
+        find_bundled_cli,
+        resolve_cli_bin,
+        resolve_state_home,
+    )
+except ImportError:  # 开发环境:工作区源码或 pip 安装版
+    from astrbot_lark_kit import (
+        CliNotFoundError,
+        EventStream,
+        LarkMessenger,
+        NormalizedLarkMessage,
+        ensure_bundled_cli,
+        find_bundled_cli,
+        resolve_cli_bin,
+        resolve_state_home,
+    )
 
 from .platform_event import LarkCliPlatformEvent, deliver_chain
 
