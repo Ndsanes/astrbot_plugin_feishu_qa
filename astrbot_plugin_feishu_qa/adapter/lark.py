@@ -198,24 +198,48 @@ class LarkAdapter:
             return output_path
         # lark-cli 要求 --output 为 cwd 内相对路径:在目标目录内以文件名调用
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            envelope = await self._run(
+        # drive +preview(source_file) 走预览通道,文档关闭"允许下载"时仍可取图;
+        # 失败再退回 drive +download 直连。
+        commands = (
+            [
                 [
-                    "+media-download",
+                    "drive",
+                    "+preview",
                     "--as",
                     "user",
+                    "--file-token",
+                    token,
                     "--type",
-                    "media",
-                    "--token",
+                    "source_file",
+                    "--output",
+                    f"./{output_path.name}",
+                    *(["--overwrite"] if overwrite else []),
+                ],
+                [
+                    "drive",
+                    "+download",
+                    "--as",
+                    "user",
+                    "--file-token",
                     token,
                     "--output",
                     f"./{output_path.name}",
                     *(["--overwrite"] if overwrite else []),
                 ],
-                timeout_s=_MEDIA_TIMEOUT_S,
-                cwd=str(output_path.parent),
-            )
-        except Exception:
+            ]
+        )
+        envelope = None
+        for args in commands:
+            try:
+                envelope = await self._run(
+                    args,
+                    timeout_s=_MEDIA_TIMEOUT_S,
+                    cwd=str(output_path.parent),
+                )
+                break
+            except Exception:
+                continue
+        if envelope is None:
             return None
 
         saved = envelope.data.get("saved_path")

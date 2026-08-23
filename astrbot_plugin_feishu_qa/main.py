@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 
@@ -565,25 +566,41 @@ class FeishuQaPlugin(Star):
     # ── 发送辅助 ──
 
     async def _send_direct(self, event: AstrMessageEvent, direct) -> None:
-        """优先 OneBot 合并转发;失败回退普通消息(spec §23)。"""
+        """aiocqhttp 走 OneBot 合并转发;其余平台(如 qq_official)发普通消息。"""
         import astrbot.api.message_components as Comp
         from astrbot.api.event import MessageChain
 
         images = direct.image_paths if self._cfg("ATTACH_IMAGES", True) else []
-        try:
-            uin = int(event.get_self_id() or 10000)
-            content = [Comp.Plain(direct.text)]
-            for path in images:
-                content.append(Comp.Image.fromFileSystem(path))
-            node = Comp.Node(uin=uin, name="Q&A 助手", content=content)
-            chain = MessageChain(chain=[node])
-        except Exception as exc:
-            logger.warning("[FeishuQA] 合并转发构建失败,回退普通消息: %s", exc)
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+
+        chain = None
+        if platform_name != "qq_official":
+            try:
+                uin = int(event.get_self_id() or 10000)
+                content = [Comp.Plain(direct.text)]
+                for path in images:
+                    content.append(Comp.Image.fromFileSystem(path))
+                node = Comp.Node(uin=uin, name="Q&A 助手", content=content)
+                chain = MessageChain(chain=[node])
+            except Exception as exc:
+                logger.warning("[FeishuQA] 合并转发构建失败,回退普通消息: %s", exc)
+                chain = None
+        if chain is None:
             chain = MessageChain()
             chain.message(direct.text)
             for path in images:
                 chain.file_image(path)
-        await event.send(chain)
+
+        try:
+            await event.send(chain)
+        except Exception as exc:
+            # 平台对图片/富组件支持不全时,至少把答案文本送出去
+            logger.warning("[FeishuQA] 发送失败,回退纯文本: %s", exc)
+            fallback = MessageChain()
+            fallback.message(direct.text)
+            await event.send(fallback)
 
     # ── 文本工具 ──
 
