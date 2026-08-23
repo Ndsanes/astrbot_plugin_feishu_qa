@@ -475,20 +475,20 @@ class FeishuQaPlugin(Star):
                 approved_by=user_id,
             )
             pending_path = self.data_root / "pending_learn.json"
-            records = []
-            if pending_path.is_file():
-                try:
-                    records = json.loads(pending_path.read_text())
-                except (json.JSONDecodeError, OSError):
-                    records = []
-            records.append(record)
-            pending_path.write_text(
-                json.dumps(records, ensure_ascii=False, indent=1)
-            )
-            yield event.plain_result(
-                "已收录为待写入候选(写入飞书文档将在下个版本开放,"
-                "当前由管理员人工同步)。"
-            )
+            # 落盘先行:写回失败/未配置时候选都不丢
+
+            wb_url = str(self._cfg("LEARNING_WRITEBACK_DOC_URL") or "").strip()
+            if not wb_url:
+                records = self._read_pending_records(pending_path)
+                records.append(record)
+                self._write_pending_records(pending_path, records)
+                yield event.plain_result(
+                    "已收录为待写入候选(未配置写回目标文档,"
+                    "当前由管理员人工同步)。"
+                )
+                return
+
+            yield event.plain_result(await self._writeback_record(record, wb_url))
             return
 
         if text.lower() in ("no", "取消", "放弃"):
@@ -564,6 +564,82 @@ class FeishuQaPlugin(Star):
         except Exception as exc:
             logger.debug("[FeishuQA] 读取群历史失败: %s", exc)
             return None
+
+    # ── /learn 写回(pending_learn.json 读写 + 副本文档追加)──
+
+    def _read_pending_records(self, path: Path) -> list[dict]:
+        """读取待写入候选列表;文件缺失/损坏返回空列表。"""
+        if not Path(path).is_file():
+            return []
+        try:
+            data = json.loads(Path(path).read_text())
+        except (json.JSONDecodeError, OSError):
+            return []
+        return data if isinstance(data, list) else []
+
+    def _write_pending_records(self, path: Path, records: list[dict]) -> None:
+        """原子语义落盘:先写临时文件再替换,避免中断产生半截 JSON。"""
+        tmp = Path(str(path) + ".tmp")
+        tmp.write_text(json.dumps(records, ensure_ascii=False, indent=1))
+        tmp.replace(path)
+
+    async def _writeback_record(self, record: dict, wb_url: str) -> str:
+        """/learn ok 确认后的写回流程(只允许副本文档,配置项显式给出)。
+
+        原子性:本地构造完整 block → 查重 → 单次 append;
+        任一步失败候选保留在 pending_learn.json,不标记已学习。
+        """
+        from .learn.writeback import (
+            build_entry_markdown,
+            derive_record_key,
+            duplicate_guard_result,
+            extract_h3_titles,
+        )
+
+        pending_path = self.data_root / "pending_learn.json"
+        records = self._read_pending_records(pending_path)
+        record_key = derive_record_key(record)
+
+        # 写回目标用独立 adapter(同一登录态,不同文档引用)
+        wb_adapter = LarkAdapter(
+            doc_ref=wb_url,
+            state_home=self.data_root / "lark_cli_home",
+        )
+        try:
+            doc = await wb_adapter.fetch_doc(fmt="markdown")
+            titles = extract_h3_titles(doc.content)
+            synced_keys = {
+                str(r.get("record_key"))
+                for r in records
+                if r.get("status") == "synced" and r.get("record_key")
+            }
+            if (
+                duplicate_guard_result(record, titles, already_synced_keys=synced_keys)
+                == "already_exists"
+            ):
+                record.update(
+                    {"status": "duplicate", "record_key": record_key}
+                )
+                records.append(record)
+                self._write_pending_records(pending_path, records)
+                return "该问答已存在于目标文档中(already exists),未重复写入。"
+
+            block = build_entry_markdown(record)
+            revision = await wb_adapter.append_doc_content(block)
+        except Exception as exc:
+            # 失败降级:候选保留,交管理员人工处理
+            logger.warning("[FeishuQA] /learn 写回失败(候选保留): %s", exc)
+            records.append({**record, "status": "failed"})
+            self._write_pending_records(pending_path, records)
+            return f"写回失败,候选已保留待人工处理:{exc}"
+
+        record.update({"status": "synced", "record_key": record_key})
+        if revision >= 0:
+            record["revision"] = revision
+        records.append(record)
+        self._write_pending_records(pending_path, records)
+        rev_note = f"(revision {revision})" if revision >= 0 else ""
+        return f"已写入副本文档{rev_note}。同步验证通过后即可检索到新条目。"
 
     def _get_aiocqhttp_client(self, event: AstrMessageEvent):
         try:
