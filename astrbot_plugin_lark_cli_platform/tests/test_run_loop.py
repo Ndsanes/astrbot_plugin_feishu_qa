@@ -81,7 +81,7 @@ async def test_bootstrap_downloads_when_missing(monkeypatch, tmp_path):
     """vendored 缺失 + bootstrap_cli=true → ensure_bundled_cli 被调用并采用结果。"""
     calls = []
 
-    def fake_ensure(vendor_dir):
+    def fake_ensure(vendor_dir, *, platforms=None):
         calls.append(vendor_dir)
         return {}
 
