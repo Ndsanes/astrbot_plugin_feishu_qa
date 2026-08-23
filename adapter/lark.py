@@ -57,13 +57,16 @@ class LarkAdapter:
         self._bin_path = bin_path
         self._limiter = RateLimiter(rate=rate)
 
-    async def _run(self, args: list[str], *, timeout_s: float | None = None):
+    async def _run(
+        self, args: list[str], *, timeout_s: float | None = None, cwd: str | None = None
+    ):
         return await run_lark_cli(
             args,
             timeout_s=timeout_s or self._timeout_s,
             limiter=self._limiter,
             env=self._env,
             bin_path=self._bin_path,
+            cwd=cwd,
         )
 
     # ── 文档 ──
@@ -118,6 +121,8 @@ class LarkAdapter:
         output_path = Path(output_path)
         if not overwrite and output_path.is_file() and output_path.stat().st_size > 0:
             return output_path
+        # lark-cli 要求 --output 为 cwd 内相对路径:在目标目录内以文件名调用
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             envelope = await self._run(
                 [
@@ -130,10 +135,11 @@ class LarkAdapter:
                     "--token",
                     token,
                     "--output",
-                    str(output_path),
+                    f"./{output_path.name}",
                     *(["--overwrite"] if overwrite else []),
                 ],
                 timeout_s=_MEDIA_TIMEOUT_S,
+                cwd=str(output_path.parent),
             )
         except Exception:
             return None
