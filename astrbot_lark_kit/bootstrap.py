@@ -121,6 +121,11 @@ def ensure_bundled_cli(
             and binary.stat().st_size > 0
             and _installed_version(plat_dir) == version
         ):
+            # 幂等跳过前仍确保可执行位(某些解压器会丢失权限)
+            try:
+                binary.chmod(binary.stat().st_mode | 0o111)
+            except OSError:
+                pass
             continue
         needed.append((plat, binary))
     if not needed:
