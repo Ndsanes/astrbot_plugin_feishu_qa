@@ -2,9 +2,11 @@
 
 AstrBot 把插件作为 `data.plugins.<目录名>.main` 导入,且 `data/plugins`
 不在 sys.path 上。本测试在临时目录重建该布局(插件 + vendored kit +
-astrbot stub),验证:
-1. main.py 可被正常导入(相对导入生效);
-2. astrbot_lark_kit 走插件内 vendored 副本(fallback 分支)。
+astrbot stub),验证两个场景:
+1. 顶层无 astrbot_lark_kit 可用时(裸实例,未 pip 安装),
+   插件走 vendored 副本兜底且正常导入;
+2. 顶层存在 astrbot_lark_kit 时(pip 安装版,合法解析层级),
+   插件同样正常导入——kit 来源允许安装版或 vendored 二选一。
 
 这是"能否导入 AstrBot 实例"的验收门槛,改动导入结构时必须保持通过。
 """
@@ -29,6 +31,20 @@ _COPY_IGNORE = shutil.ignore_patterns(
     "tests",
     "dist",
 )
+
+
+class _BlockTopLevelKit:
+    """meta_path 钩子:让顶层 `import astrbot_lark_kit` 失败,
+    模拟"裸实例上未安装 kit"的真实部署场景。"""
+
+    def find_spec(self, fullname: str, path=None, target=None):  # noqa: ANN001
+        if fullname == "astrbot_lark_kit" or fullname.startswith("astrbot_lark_kit."):
+            raise ImportError("顶层 astrbot_lark_kit 已被测试钩子屏蔽")
+        return None
+
+
+def _block_installed_kit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "meta_path", [_BlockTopLevelKit(), *sys.meta_path])
 
 WORKSPACE_ROOT = PLUGIN_SRC.parent
 
@@ -71,18 +87,40 @@ def deployed_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         sys.modules[name] = mod
 
 
-async def test_plugin_imports_as_data_plugins_module(deployed_layout: Path) -> None:
+async def test_vendored_fallback_without_top_level_kit(
+    deployed_layout: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """裸实例(顶层无 kit):插件必须走 vendored 副本并正常导入。"""
     import importlib
 
-    module = importlib.import_module(
-        "data.plugins.astrbot_plugin_feishu_qa.main",
-    )
+    _block_installed_kit(monkeypatch)
 
+    module = importlib.import_module("data.plugins.astrbot_plugin_feishu_qa.main")
     assert hasattr(module, "FeishuQaPlugin")
 
-    # kit 必须来自插件内 vendored 副本,而非顶层解析
     kit = sys.modules["data.plugins.astrbot_plugin_feishu_qa.astrbot_lark_kit"]
     assert str(deployed_layout) in kit.__file__
     assert "data/plugins/astrbot_plugin_feishu_qa/astrbot_lark_kit" in (
         kit.__file__.replace("\\", "/")
     )
+
+
+async def test_imports_with_top_level_kit_available(deployed_layout: Path) -> None:
+    """顶层存在 kit(pip 安装版):合法解析层级,插件正常导入即可。
+
+    kit 实际来源允许安装版(site-packages)或 vendored 副本——取决于运行
+    环境是否 pip 安装过;唯一不允许的是导入失败。
+    """
+    import importlib
+
+    module = importlib.import_module("data.plugins.astrbot_plugin_feishu_qa.main")
+    assert hasattr(module, "FeishuQaPlugin")
+
+    vendored = sys.modules.get(
+        "data.plugins.astrbot_plugin_feishu_qa.astrbot_lark_kit"
+    )
+    top_level = sys.modules.get("astrbot_lark_kit")
+    assert vendored is not None or top_level is not None
+
+

@@ -1,2 +1,5 @@
-# 运行时依赖:astrbot_lark_kit 以源码子包形式随插件分发(打包脚本会将其
-# 复制为 astrbot_lark_kit/ 打进 zip),无第三方 pip 依赖。核心原则:最少依赖(spec §0.14)。
+# 运行时依赖:astrbot_lark_kit 已发版为独立包,正式安装走 git URL。
+# 开发模式:工作区根目录的 astrbot_lark_kit/ 源码优先(pytest pythonpath=["."]),
+# 打包脚本仍会把源码复制为插件内 vendored 子包作为兜底,三层解析顺序:
+#   1) 开发环境 workspace 源码  2) pip 安装版  3) 插件 zip 内 vendored 副本
+astrbot-lark-kit @ git+https://github.com/Ndsanes/astrbot_lark_kit.git@v0.1.0
