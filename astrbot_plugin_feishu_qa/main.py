@@ -122,7 +122,35 @@ class FeishuQaPlugin(Star):
 
     # ── 生命周期 ──
 
+    async def _ensure_cli_configured(self) -> str:
+        """确保 lark-cli 已完成应用配置;凭据来自 FEISHU_APP_ID/SECRET。
+
+        Returns:
+            "" 表示已配置或配置成功;否则返回失败原因。
+        """
+        try:
+            if await self.adapter.is_configured():
+                return ""
+        except Exception:
+            pass
+        app_id = str(self._cfg("FEISHU_APP_ID", "") or "")
+        app_secret = str(self._cfg("FEISHU_APP_SECRET", "") or "")
+        if not app_id or not app_secret:
+            return (
+                "lark-cli 未完成应用配置;请在插件配置里填写 "
+                "FEISHU_APP_ID / FEISHU_APP_SECRET 后重载"
+            )
+        try:
+            await self.adapter.configure_app(app_id, app_secret)
+        except Exception as exc:
+            return f"lark-cli config init 失败: {exc}"
+        logger.info("[FeishuQA] lark-cli 应用配置完成(app_id=%s...)", app_id[:8])
+        return ""
+
     async def initialize(self) -> None:
+        config_err = await self._ensure_cli_configured()
+        if config_err:
+            logger.warning("[FeishuQA][CONFIG] %s", config_err)
         if int(self._cfg("SYNC_INTERVAL_HOURS", 12)) > 0:
             self._sync_task = asyncio.create_task(self._sync_loop())
         if int(self._cfg("AUTH_CHECK_HOURS", 12)) > 0:
@@ -391,6 +419,11 @@ class FeishuQaPlugin(Star):
 
         if self._poll_task is not None and not self._poll_task.done():
             yield event.plain_result("已有授权流程进行中,请先完成或稍后再试")
+            return
+
+        config_err = await self._ensure_cli_configured()
+        if config_err:
+            yield event.plain_result(config_err)
             return
 
         initiated = await initiate_reauth_flow(self.adapter)

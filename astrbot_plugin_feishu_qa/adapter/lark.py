@@ -247,6 +247,47 @@ class LarkAdapter:
             raise
         return proc.returncode or 0, stdout
 
+    async def is_configured(self) -> bool:
+        """CLI 是否已完成应用配置(未配置时 auth status 以退出码 3 失败)。"""
+        try:
+            await self.auth_status()
+            return True
+        except Exception as exc:
+            return "not_configured" not in str(exc) and "not configured" not in str(exc)
+
+    async def configure_app(self, app_id: str, app_secret: str) -> None:
+        """非交互完成 lark-cli config init(凭据走 stdin,不进进程列表)。
+
+        Raises:
+            CliExecutionError: init 非零退出。
+        """
+        if not app_id or not app_secret:
+            raise ValueError("app_id/app_secret 不能为空")
+        binary = self._bin_path or resolve_cli_bin(env=self._env)
+        child_env = {**os.environ, **self._extra_env} if self._extra_env else None
+        proc = await asyncio.create_subprocess_exec(
+            str(binary),
+            "config",
+            "init",
+            "--app-id",
+            app_id,
+            "--brand",
+            "feishu",
+            "--app-secret-stdin",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=child_env,
+        )
+        _, stderr = await asyncio.wait_for(
+            proc.communicate(app_secret.encode()), timeout=60
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"config init 失败(退出码 {proc.returncode}): "
+                f"{stderr.decode(errors='replace')[:300]}"
+            )
+
     async def auth_status(self) -> AuthStatus:
         obj = await run_lark_cli_json(
             ["auth", "status"],
