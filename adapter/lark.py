@@ -7,6 +7,7 @@ auth 健康检查与 re-auth 引导。业务操作一律 user 身份。
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +17,9 @@ try:
         Health,
         RateLimiter,
         auth_status_from_dict,
+        find_bundled_cli,
         health_of,
+        resolve_cli_bin,
         run_lark_cli,
         run_lark_cli_json,
     )
@@ -26,7 +29,9 @@ except ImportError:  # 打包分发时 kit 以子包形式随插件提供
         Health,
         RateLimiter,
         auth_status_from_dict,
+        find_bundled_cli,
         health_of,
+        resolve_cli_bin,
         run_lark_cli,
         run_lark_cli_json,
     )
@@ -61,14 +66,23 @@ class LarkAdapter:
         timeout_s: float = 30.0,
         env: dict[str, str] | None = None,
         bin_path: Path | None = None,
+        state_home: Path | None = None,
     ) -> None:
         self.doc_ref = doc_ref
         self._timeout_s = timeout_s
         self._env = env
-        self._bin_path = bin_path
+        # 二进制优先级:显式注入 > 插件携带(vendor/lark-cli/<平台>/) > PATH。
+        bundled = find_bundled_cli(Path(__file__).resolve().parents[1] / "vendor" / "lark-cli")
+        self._bin_path = bin_path or bundled
+        # 登录态落盘目录:重定向 HOME,使 auth 凭据随插件数据持久化(容器友好)。
+        self._extra_env = {"HOME": str(state_home)} if state_home else None
         # 供 re-auth 等旁路调用复用同一测试注入通道
         self.env = env
-        self.bin_path = bin_path
+        self.bin_path = self._bin_path
+        self.extra_env = self._extra_env
+        self.state_home = state_home
+        if state_home is not None:
+            state_home.mkdir(parents=True, exist_ok=True)
         self._limiter = RateLimiter(rate=rate)
         self.timeout_s = timeout_s
         self.limiter = self._limiter
@@ -83,6 +97,7 @@ class LarkAdapter:
             env=self._env,
             bin_path=self._bin_path,
             cwd=cwd,
+            extra_env=self._extra_env,
         )
 
     # ── 文档 ──
@@ -147,7 +162,6 @@ class LarkAdapter:
         try:
             envelope = await self._run(
                 [
-                    "docs",
                     "+media-download",
                     "--as",
                     "user",
@@ -171,6 +185,29 @@ class LarkAdapter:
 
     # ── 登录态 ──
 
+    async def run_raw(self, args: list[str], *, timeout_s: float = 30.0) -> tuple[int, bytes]:
+        """旁路调用:返回 (退出码, stdout),不解析 envelope。
+
+        用于 im +messages-send 等非 envelope 形态命令;与主调用共用
+        携带二进制和 HOME 重定向。
+        """
+        binary = self._bin_path or resolve_cli_bin(env=self._env)
+        child_env = {**os.environ, **self._extra_env} if self._extra_env else None
+        proc = await asyncio.create_subprocess_exec(
+            str(binary),
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=child_env,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+        return proc.returncode or 0, stdout
+
     async def auth_status(self) -> AuthStatus:
         obj = await run_lark_cli_json(
             ["auth", "status"],
@@ -178,6 +215,7 @@ class LarkAdapter:
             limiter=self._limiter,
             env=self._env,
             bin_path=self._bin_path,
+            extra_env=self._extra_env,
         )
         return auth_status_from_dict(obj)
 
@@ -186,8 +224,9 @@ class LarkAdapter:
         return health_of(status, warning_hours=warning_hours)
 
 
-# re-auth 引导命令模板:管理员在宿主机执行即可走 CLI 自带 Device Flow。
-REAUTH_HINT = "请在部署机执行: lark-cli auth login  (或 lark-cli auth qrcode 扫码)"
+# re-auth 引导提示:插件已内置 lark-cli 且登录态落在插件数据目录,
+# 管理员无需接触宿主机。
+REAUTH_HINT = "管理员请在会话中发送 /qa_auth_login 发起扫码授权(或等待授权卡片推送)"
 
 
 async def wait_for_auth_recovery(

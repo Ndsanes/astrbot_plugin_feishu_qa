@@ -159,6 +159,7 @@ async def initiate_reauth_flow(
             limiter=adapter.limiter,
             env=adapter.env,
             bin_path=adapter.bin_path,
+            extra_env=adapter.extra_env,
         )
     except Exception as exc:
         logger.warning("[AuthKeeper] 发起授权失败: %s", exc)
@@ -181,6 +182,9 @@ async def poll_auth_completion(
                 ["auth", "login", "--device-code", device_code, "--json"],
                 timeout_s=timeout_s,
                 limiter=adapter.limiter,
+                env=adapter.env,
+                bin_path=adapter.bin_path,
+                extra_env=adapter.extra_env,
             ),
             timeout=timeout_s,
         )
