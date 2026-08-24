@@ -343,3 +343,8 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   `[标题](文档URL#block_id)`——官方适配器默认原生 markdown(msg_type=2)
   投递可点击;其他平台维持标题行+裸链接。桩补 get_platform_name。
   根套件基线 245→246。
+- **qa v0.7.2(命中预判注入)**:02:22 C2C 实测双主题混合提问时模型跳过
+  qa_send_answer 自行转述——纯提示词引导对小模型不够硬。钩子在 LLM 请求
+  前跑本地词法检索,MEDIUM+ 命中把具体 entry_ids 指令注入 req.prompt 尾部
+  (缓存安全通道:系统提示词恒定逐字节不变,AGENTS.md 检索不进系统提示词
+  约束得以遵守);未命中零改动。基线 246→248。

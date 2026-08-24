@@ -266,6 +266,40 @@ class TestFaqCitationGuidance:
         run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
         assert req.system_prompt.startswith("\n[FAQ 引用规范]")
 
+    def test_hit_prediction_injects_into_user_prompt(
+        self, plugin: FeishuQaPlugin
+    ) -> None:
+        """词法命中 MEDIUM+ 时指令注入 req.prompt 尾部(缓存安全通道)。"""
+
+        class Req:
+            def __init__(self) -> None:
+                self.system_prompt = ""
+                self.prompt = "我 cakewalk 装好之后 全是 bandlab 找不到自己装的了"
+
+        event = AstrMessageEvent(
+            message_str="我 cakewalk 装好之后 全是 bandlab 找不到自己装的了"
+        )
+        req = Req()
+        run_handler(plugin.add_faq_citation_guidance(event, req))
+        # 缓存安全不变量:系统提示词只含恒定规范,无随消息变化的内容
+        from astrbot_plugin_feishu_qa.main import _FAQ_CITATION_GUIDANCE
+
+        assert req.system_prompt == _FAQ_CITATION_GUIDANCE
+        assert "[语料匹配]" in req.prompt
+        assert "entry_ids=qa_" in req.prompt
+        assert "qa_send_answer" in req.prompt
+
+    def test_no_match_leaves_prompt_untouched(self, plugin) -> None:
+        class Req:
+            def __init__(self) -> None:
+                self.system_prompt = ""
+                self.prompt = "今天天气怎么样"
+
+        event = AstrMessageEvent(message_str="今天天气怎么样")
+        req = Req()
+        run_handler(plugin.add_faq_citation_guidance(event, req))
+        assert req.prompt == "今天天气怎么样", "未命中不得改动用户消息"
+
 
 class TestQaSendAnswer:
     """qa_send_answer 工具:命中条目 → 飞书文档章节直达链接列表。"""

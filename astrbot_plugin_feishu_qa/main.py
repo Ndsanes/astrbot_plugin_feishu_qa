@@ -58,7 +58,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.7.1",
+    "0.7.2",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -432,8 +432,29 @@ class FeishuQaPlugin(Star):
 
     @filter.on_llm_request()
     async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:
-        """注入 FAQ 引用规范(req: ProviderRequest,静态短文本不破坏提示词缓存)。"""
+        """注入 FAQ 引用规范与命中预判。
+
+        系统提示词只追加恒定文本(前缀缓存安全);随消息变化的命中指令
+        注入 req.prompt 尾部——尾部本就逐轮变化,不破坏缓存(AGENTS.md
+        检索内容不进系统提示词之约束)。
+        """
         req.system_prompt = (req.system_prompt or "") + _FAQ_CITATION_GUIDANCE
+
+        query = self._strip_command(event.message_str or "")
+        if not query or self._retriever is None:
+            return
+        results = self._retriever.search(query, top_k=2)
+        hits = [r for r in results if r.confidence != "LOW"]
+        if not hits:
+            return
+        ids = ",".join(r.entry.id for r in hits)
+        titles = "；".join(r.entry.raw_title for r in hits)
+        req.prompt = (
+            (req.prompt or "")
+            + f"\n[语料匹配] 本条消息已命中精选问答:{titles}(entry_ids={ids})。"
+            "回答前必须先调用 qa_send_answer(entry_ids=上述值)发送章节直达链接,"
+            "再视需要简短补充;不要转述条目正文。"
+        )
 
     # ── 管理指令 ──
 
