@@ -117,6 +117,29 @@ class LarkCliPlatform(Platform):
             except OSError:
                 pass
 
+    @staticmethod
+    def _exec_safe_copy(binary: Path) -> Path:
+        """数据卷可能挂载为 noexec:把二进制复制到可执行目录(/tmp)再使用。"""
+        import shutil
+        import subprocess
+
+        probe = subprocess.run(
+            [str(binary), "--version"], capture_output=True, timeout=30,
+        )
+        if probe.returncode == 0:
+            return binary
+        target = Path("/tmp/astrbot_lark_cli/lark-cli")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(binary, target)
+        target.chmod(0o755)
+        check = subprocess.run(
+            [str(target), "--version"], capture_output=True, timeout=30,
+        )
+        if check.returncode != 0:
+            raise CliExecutionError(f"/tmp 副本仍不可执行:{check.stderr[:200]}")
+        logger.info("[lark_cli] 数据卷 noexec,已改用 /tmp 副本")
+        return target
+
     async def _aresolve_binary(self) -> Path | None:
         self._repair_bundled_binary()
         binary = find_bundled_cli(VENDOR_DIR)
