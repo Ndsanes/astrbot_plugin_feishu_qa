@@ -58,7 +58,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.7.2",
+    "0.7.3",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -185,26 +185,23 @@ class FeishuQaPlugin(Star):
         old = self.store.load()
         diff = diff_manifests(old, manifest)
 
-        # 快照未变但本地图片缺失(重装/数据丢失/历史下载失败)时不得走快速
-        # 返回路径——必须继续执行下方补下载,否则图片永久缺失且无人察觉。
-        missing_images = any(
-            not (p := self.store.image_path(img["local_path"])).is_file()
-            or p.stat().st_size == 0
-            for entry in ((old or {}).get("entries") or [])
-            for img in (entry.get("images") or [])
-            if img.get("local_path")
+        # 章节定位(块 ID)会随文档结构编辑整体重生:即使正文一字未改,
+        # 也可能全部换新。快照必须无条件刷新,否则章节直达链接静默失效
+        #(故不设 unchanged 快速路径;图片按文件存在性短路,代价可忽略)。
+        old_locs = (
+            {e["id"]: e.get("source_locator", "") for e in old["entries"]}
+            if old
+            else {}
         )
+        relinked = [
+            e
+            for e in manifest["entries"]
+            if old_locs and old_locs.get(e["id"]) != e.get("source_locator", "")
+        ]
 
-        if (
-            old
-            and not diff["changed"]
-            and old.get("revision_id") == doc.revision_id
-            and not missing_images
-        ):
-            return {"status": "unchanged", "revision_id": doc.revision_id}
-
-        # 下载缺失图片(单张失败不阻断)
+        # 下载缺失图片(已存在的按文件短路,单张失败不阻断)
         failures = 0
+        redownloaded = 0
         for entry in manifest["entries"]:
             for img in entry["images"]:
                 target = self.store.image_path(img["local_path"])
@@ -213,17 +210,35 @@ class FeishuQaPlugin(Star):
                 path = await self.adapter.download_media(img["file_token"], target)
                 if path is None:
                     failures += 1
+                else:
+                    redownloaded += 1
 
         store = SnapshotStore(self.data_root)
         store.commit(manifest)
         self._load_corpus()
+        if relinked:
+            samples = ";".join(
+                f"{e['id']}:{old_locs.get(e['id'], '?')}→{e['source_locator']}"
+                for e in relinked[:3]
+            )
+            logger.warning(
+                "[FeishuQA] 章节定位已刷新 %s 条(文档结构编辑会使旧块链接失效) 样例:%s",
+                len(relinked),
+                samples,
+            )
+        status = (
+            "synced"
+            if diff["changed"] or failures or redownloaded or relinked
+            else "unchanged"
+        )
         return {
-            "status": "synced",
+            "status": status,
             "revision_id": doc.revision_id,
             "added": diff["added"],
             "updated": diff["updated"],
             "removed": diff["removed"],
             "image_failures": failures,
+            "relinked": len(relinked),
         }
 
     # ── 指令 ──
