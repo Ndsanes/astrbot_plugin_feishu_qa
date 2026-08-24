@@ -20,7 +20,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
 from .adapter.gateway import GatewayClient
-from .answer.direct import SOURCE_ATTRIBUTION, DirectAnswer, format_direct_answer
+from .answer.direct import DirectAnswer
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
 from .corpus.parser import parse_xml
@@ -39,16 +39,16 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 
 # FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
 _FAQ_CITATION_GUIDANCE = (
-    "\n[FAQ 引用规范] 知识库结果中「【全家桶FAQ >」开头的条目是精选问答原文,"
-    "处理规则:"
-    "(1)某条目与用户问题匹配时,优先调用 qa_send_answer(entry_id=条目标记里的id)"
-    "把原文连同操作截图一次性发给用户,之后只做简短衔接或追问,不要改写/缩写/复述其正文;"
-    "(2)仅需补截图时才用 qa_entry_images;"
-    "(3)回答涉及条目内容时,末尾另起一行注明:"
-    "📄 出处:《有福同享全家桶Q&A汇总》条目标题方括号里的章节路径"
-    "(如 一、Cakewalk Sonar相关问答汇总 > （一）缺少内容相关);"
-    "(4)正文里「参考图N」「如图」「下图」等指代依赖原始配图,不要臆测图中内容;"
-    "条目末尾 [配图 qa_xxx] 标记表示该条目有截图,不要把标记原样输出给用户。"
+    "\n[FAQ 引用规范] 知识库结果分两类,处理方式不同:"
+    "(A)「【全家桶FAQ >」开头的条目是精选问答原文——命中时调用 qa_send_answer"
+    "(entry_ids=条目标记里的 id,多条相关就逗号分隔一并传入),插件会把飞书文档"
+    "章节直达链接列表发给用户;之后只做简短衔接或追问,不要复述正文。"
+    "(B)其他来源(如 Cakewalk sonar 手册)没有可跳转的文档,直接依据知识块"
+    "组织回答并翻译要点。"
+    "统一要求:回答用到 FAQ 条目内容时,末尾另起一行注明"
+    "📄 出处:《有福同享全家桶Q&A汇总》条目标题方括号里的章节路径;"
+    "不要臆测知识块里「参考图N」「如图」指代的图片内容;"
+    "不要把 [配图 qa_xxx] 标记原样输出给用户。"
 )
 
 
@@ -58,7 +58,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.6.0",
+    "0.7.0",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -370,9 +370,10 @@ class FeishuQaPlugin(Star):
 
     @filter.llm_tool(name="qa_send_answer")
     async def qa_send_answer(self, event: AstrMessageEvent, entry_ids: str):
-        """把与用户问题匹配的一个或多个 QA 条目按文档原文(含操作截图)合并为一条消息发送给用户。
+        """把与用户问题匹配的一个或多个 QA 条目整理成飞书文档章节直达链接列表发送给用户。
 
-        当【全家桶FAQ】条目命中问题时优先使用;发送后只需简短衔接,不要复述条目内容。
+        当【全家桶FAQ】条目命中问题时优先使用;链接列表发出后只需简短衔接,
+        不要复述条目内容。
 
         Args:
             entry_ids (str): QA 条目 ID,形如 qa_xxxxxxxxxxxxxxxx,多个用英文逗号分隔,取自条目标记
@@ -393,36 +394,31 @@ class FeishuQaPlugin(Star):
             bad = ",".join(skipped) if skipped else "未提供有效条目"
             return f"发送失败:没有可投递的条目({bad})"
 
-        max_imgs = int(self._cfg("MAX_IMAGES", 3))
-        parts: list[str] = []
-        image_paths: list[str] = []
-        for entry in entries:
-            d = format_direct_answer(
-                entry,
-                store=self.store,
-                max_images=max_imgs,
-                include_attribution=False,
-            )
-            parts.append(d.text)
-            image_paths.extend(d.image_paths)
-        combined = DirectAnswer(
-            text=(
-                "\n\n———\n\n".join(parts)
-                + "\n\n"
-                + SOURCE_ATTRIBUTION
-                + f"(共{len(entries)}条)"
-            ),
-            image_paths=image_paths[:9],  # 单次投递图片总量上限,防刷屏
-            entry_id=",".join(e.id for e in entries),
+        lines = [f"📖 命中 {len(entries)} 条官方整理的解答(点链接直达文档对应章节):"]
+        for i, entry in enumerate(entries, 1):
+            lines.append(f"\n{i}、【{entry.raw_title}】")
+            lines.append(f"👉 {self._wiki_block_url(entry)}")
+        lines.append("\n📄 来源:《有福同享全家桶Q&A汇总》(肖闻 Xiaowenn 整理)")
+        direct = DirectAnswer(
+            text="\n".join(lines), image_paths=[], entry_id=entries[0].id
         )
-        # 单次 event.send 投出整块内容;经此而非 set_result:Agent 循环保持存活,
-        # 可继续多问衔接。回执明示已投递原文,防止模型再复述一遍。
-        await self._send_direct(event, combined)
-        titles = "》《".join(e.raw_title for e in entries)
+        # 单次 event.send 投出整块;经此而非 set_result:Agent 循环保持存活。
+        await self._send_direct(event, direct)
         note = f";已跳过:{','.join(skipped)}" if skipped else ""
-        imgs = len(combined.image_paths)
-        suffix = f"(含{imgs}张截图)" if imgs else "(纯文本)"
-        return f"已合并投递{len(entries)}条文档原文{suffix}:《{titles}》{note};请勿复述其正文。"
+        titles = "》《".join(e.raw_title for e in entries)
+        return (
+            f"已投递{len(entries)}条章节直达链接:《{titles}》{note};"
+            "请勿复述条目正文,链接里含图文步骤。"
+        )
+
+    def _wiki_block_url(self, entry) -> str:
+        """构造飞书文档锚点直达链接(WIKI_URL#block_id);无定位时退回整篇。"""
+        base = str(self._cfg("WIKI_URL", "") or "").strip().rstrip("/")
+        if not base:
+            return "(未配置 WIKI_URL)"
+        if entry.source_locator:
+            return f"{base}#{entry.source_locator}"
+        return base
 
     @filter.on_llm_request()
     async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:

@@ -256,7 +256,7 @@ class TestFaqCitationGuidance:
         run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
         assert req.system_prompt.startswith("base-prompt")
         assert "出处:《有福同享全家桶Q&A汇总》" in req.system_prompt
-        assert "qa_entry_images" in req.system_prompt
+        assert "qa_send_answer" in req.system_prompt
 
     def test_guidance_handles_empty_system_prompt(self, plugin) -> None:
         class Req:
@@ -268,7 +268,7 @@ class TestFaqCitationGuidance:
 
 
 class TestQaSendAnswer:
-    """qa_send_answer 工具:原文图文整体直发,支持多条目合并单块投递。"""
+    """qa_send_answer 工具:命中条目 → 飞书文档章节直达链接列表。"""
 
     def test_tool_registered_with_docstring(self, plugin: FeishuQaPlugin) -> None:
         fn = plugin.qa_send_answer
@@ -288,45 +288,38 @@ class TestQaSendAnswer:
         assert isinstance(out[0], str) and "没有可投递" in out[0]
         assert event.sent == [], "校验失败不得发送任何消息"
 
-    def test_sends_full_entry_text_and_images(self, plugin: FeishuQaPlugin) -> None:
-        entry = next(
-            e for e in plugin._entries if e.id == TestQaEntryImages.ENTRY_ID
-        )
-        TestQaEntryImages()._seed_images(plugin, entry.images)
+    def test_single_entry_emits_block_anchor_link(
+        self, plugin: FeishuQaPlugin
+    ) -> None:
+        entry = next(e for e in plugin._entries if e.source_locator)
         event = AstrMessageEvent()
-        out = run_handler(
-            plugin.qa_send_answer(event, entry_ids=TestQaEntryImages.ENTRY_ID)
-        )
-        result = out[0]
-        assert isinstance(result, str) and "勿复述" in result and "1条" in result
-        assert len(event.sent) == 1, "多条目也必须合并为一次发送"
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=entry.id))
+        assert isinstance(out[0], str) and "直达链接" in out[0] and "勿复述" in out[0]
+        assert len(event.sent) == 1
         node = event.sent[0].chain[0]
-        assert node.type == "Node"
         texts = [c.text for c in node.content if c.type == "Plain"]
-        assert any(entry.title in t for t in texts), "正文须含条目标题原文"
+        joined = "\n".join(texts)
+        # 锚点格式(官方):文档URL#block_id
+        assert f"https://my.feishu.cn/wiki/test#{entry.source_locator}" in joined
+        assert entry.raw_title in joined and "📖 命中 1 条" in joined
 
     def test_multi_entry_merged_into_single_send(self, plugin) -> None:
-        withimg = [e for e in plugin._entries if e.images][:2]
-        for e in withimg:
-            TestQaEntryImages()._seed_images(plugin, e.images)
+        picks = [e for e in plugin._entries if e.source_locator][:2]
         event = AstrMessageEvent()
         out = run_handler(
-            plugin.qa_send_answer(event, entry_ids=",".join(e.id for e in withimg))
+            plugin.qa_send_answer(event, entry_ids=",".join(e.id for e in picks))
         )
-        assert f"已合并投递{len(withimg)}条" in out[0]
-        assert len(event.sent) == 1, "多问场景必须单块投递"
+        assert f"已投递{len(picks)}条章节直达链接" in out[0]
+        assert len(event.sent) == 1, "多条目也必须合并为一次发送"
         all_text = "".join(
             c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
         )
-        for e in withimg:
-            assert e.title in all_text
-        imgs = [
-            c for c in event.sent[0].chain[0].content if c.type == "Image"
-        ]
-        assert len(imgs) >= 2
+        for e in picks:
+            assert f"test#{e.source_locator}" in all_text
+            assert e.raw_title in all_text
 
     def test_mixed_valid_invalid_skips_bad_ids(self, plugin) -> None:
-        good = next(e for e in plugin._entries if not e.images)
+        good = next(e for e in plugin._entries if e.source_locator)
         event = AstrMessageEvent()
         out = run_handler(
             plugin.qa_send_answer(event, entry_ids=f"{good.id}, bad123")
@@ -334,12 +327,19 @@ class TestQaSendAnswer:
         assert "已跳过:bad123" in out[0]
         assert len(event.sent) == 1, "合法条目应照常投递"
 
-    def test_text_only_entry_still_delivered(self, plugin: FeishuQaPlugin) -> None:
-        noimg = next(e for e in plugin._entries if not e.images)
+    def test_entry_without_locator_falls_back_to_doc_root(
+        self, plugin: FeishuQaPlugin
+    ) -> None:
+        noloc = next((e for e in plugin._entries if not e.source_locator), None)
+        if noloc is None:
+            noloc = plugin._entries[0]
+            noloc.source_locator = ""  # 人为清空定位
         event = AstrMessageEvent()
-        out = run_handler(plugin.qa_send_answer(event, entry_ids=noimg.id))
-        assert isinstance(out[0], str) and "纯文本" in out[0]
-        assert len(event.sent) == 1
+        run_handler(plugin.qa_send_answer(event, entry_ids=noloc.id))
+        all_text = "".join(
+            c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
+        )
+        assert "https://my.feishu.cn/wiki/test\n" in all_text + "\n"
 
 
 class TestAdminCommands:
