@@ -317,3 +317,7 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   待用户实测:真实群里 @bot 问 FAQ 问题,观察 astr_kb_search 命中 FAQ 库 +
   Agent 是否调用 qa_entry_images 直发截图;kb_names 加"音频软件全家桶 FAQ"
   需 WebUI 勾选(PUT system-config 会回滚该键,不能代改)。
+- **qa v0.4.1(FAQ 出处引用规范)**:`on_llm_request` 钩子注入静态提示词——
+  回答引用「全家桶FAQ」条目时末尾注明 📄 出处(文档名+章节路径),并约束
+  仅在用户索要截图/步骤强依赖配图时才调 qa_entry_images(23:12 实测模型
+  拿到标记但未主动发图,靠此规范引导)。基线 235→238。

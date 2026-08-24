@@ -36,12 +36,25 @@ from .storage.snapshot import SnapshotStore
 PLUGIN_NAME = "astrbot_plugin_feishu_qa"
 DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 
+# FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
+_FAQ_CITATION_GUIDANCE = (
+    "\n[FAQ 引用规范] 知识库结果中若存在以「【全家桶FAQ >」开头的条目且回答用到其内容,"
+    "必须在回答末尾另起一行注明出处,格式:"
+    "📄 出处:《有福同享全家桶Q&A汇总》条目标题方括号里的章节路径"
+    "(如 一、Cakewalk Sonar相关问答汇总 > （一）缺少内容相关);"
+    "用到多条时合并为一行列出。忽略条目末尾的 [本条目包含可按需发送的操作截图,entry_id=…] 标记,"
+    "不要把它原样输出给用户;仅当用户主动索要截图或操作步骤强依赖配图才能理解时,"
+    "才调用 qa_entry_images 工具(从对应标记取 entry_id)发送截图。"
+)
+
+
+
 
 @register(
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.4.0",
+    "0.4.1",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -335,6 +348,11 @@ class FeishuQaPlugin(Star):
         # 返回 MessageEventResult:核心按 tool_direct_result 直发给用户并结束本轮
         # Agent;返回 str 则作为工具结果回传 LLM 继续。两条路径互斥,见执行器契约。
         return result
+
+    @filter.on_llm_request()
+    async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:
+        """注入 FAQ 引用规范(req: ProviderRequest,静态短文本不破坏提示词缓存)。"""
+        req.system_prompt = (req.system_prompt or "") + _FAQ_CITATION_GUIDANCE
 
     # ── 管理指令 ──
 

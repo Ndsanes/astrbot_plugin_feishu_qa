@@ -239,6 +239,34 @@ class TestQaEntryImages:
         assert len(image_parts) == 1, "重复引用的同一张图只发送一次"
 
 
+class TestFaqCitationGuidance:
+    """on_llm_request 钩子:FAQ 出处引用规范注入。"""
+
+    def test_hook_registered(self, plugin: FeishuQaPlugin) -> None:
+        assert getattr(plugin.add_faq_citation_guidance, "_filter", ("",))[0] == (
+            "on_llm_request"
+        )
+
+    def test_hook_appends_guidance(self, plugin: FeishuQaPlugin) -> None:
+        class Req:
+            def __init__(self) -> None:
+                self.system_prompt = "base-prompt"
+
+        req = Req()
+        run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
+        assert req.system_prompt.startswith("base-prompt")
+        assert "出处:《有福同享全家桶Q&A汇总》" in req.system_prompt
+        assert "qa_entry_images" in req.system_prompt
+
+    def test_guidance_handles_empty_system_prompt(self, plugin) -> None:
+        class Req:
+            system_prompt = ""
+
+        req = Req()
+        run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
+        assert req.system_prompt.startswith("\n[FAQ 引用规范]")
+
+
 class TestAdminCommands:
     def test_status_denies_non_admin(self, plugin: FeishuQaPlugin) -> None:
         event = AstrMessageEvent(sender_id="nobody")
