@@ -160,7 +160,6 @@ class EventStream:
             self._event_key,
             "--as",
             "bot",
-            "--quiet",
         ]
 
     async def _terminate(self) -> None:
@@ -224,7 +223,20 @@ class EventStream:
                 finally:
                     # 无论 EOF/异常/生成器关闭,都先回收当前子进程
                     code = self._proc.returncode
+                    err_tail = b""
+                    if self._proc is not None and self._proc.stderr is not None:
+                        try:
+                            err_tail = await asyncio.wait_for(
+                                self._proc.stderr.read(4096), timeout=3
+                            )
+                        except Exception:
+                            pass
                     await self._terminate()
+                    if self._log:
+                        self._log(
+                            f"consumer exit code={code} "
+                            f"stderr={err_tail.decode('utf-8', errors='replace')[-400:]!r}"
+                        )
                     if code not in (None, 0):
                         self._log(f"consumer 非零退出 code={code}")
                     if self._log:
