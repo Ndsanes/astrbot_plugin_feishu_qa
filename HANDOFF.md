@@ -335,3 +335,7 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   部分 子命令/版本 生效)——网关现按 dest_dir 归位路径并预清理残留。
   连带修 sync_once 缺图自愈(unchanged 快速路径曾永久跳过补下载)。
   终局:image_failures 110→0。诊断利器:平台侧失败 WARN 含完整 CLI JSON。
+- **qa v0.7.0(章节直达链接)**:qa_send_answer 投递形态改为飞书文档锚点
+  深链列表(官方格式 文档URL#block_id,locator 语料 41/41 齐备);引用规范
+  双轨制——FAQ 命中转链接、手册类来源 LLM 正常作答。注意块 ID 随文档
+  结构编辑重生成,链接新鲜度=最近一次同步(定时同步会自动跟进)。
