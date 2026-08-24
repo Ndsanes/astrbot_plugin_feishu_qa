@@ -227,7 +227,7 @@ class EventStream:
                     if self._proc is not None and self._proc.stderr is not None:
                         try:
                             err_tail = await asyncio.wait_for(
-                                self._proc.stderr.read(4096), timeout=3
+                                self._proc.stderr.read(65536), timeout=5
                             )
                         except Exception:
                             pass
@@ -235,7 +235,7 @@ class EventStream:
                     if self._log:
                         self._log(
                             f"consumer exit code={code} "
-                            f"stderr={err_tail.decode('utf-8', errors='replace')[-400:]!r}"
+                            f"stderr={err_tail.decode('utf-8', errors='replace')!r}"
                         )
                     if code not in (None, 0):
                         self._log(f"consumer 非零退出 code={code}")
