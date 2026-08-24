@@ -38,3 +38,31 @@ kit 55+10=65？实际：astrbot_lark_kit 65、astrbot_plugin_lark_cli_platform 1
 2. 在机器人所在的飞书群里发一条消息，观察是否收到回复；再验证主动发送/图片。
 3. 补 feishu_qa 的 ENABLED_GROUPS / ADMIN_USERS 配置（重装后仍为空）。
 4. 清理草稿文档中的验证条目。
+
+## 平台化工程运行时状态(截至 05:35)
+
+已解决并部署:
+- kit v0.2.0+ events/messaging/bootstrap/state 全部实现并有测试(全套 176 passed)
+- astrbot_plugin_lark_cli_platform 已在实例安装(含 vendor 二进制与 vendored kit)
+- 修复链:Platform 签名(2参基类+manager三参调用)、PLUGIN_DIR 错位、
+  noexec 数据卷(/tmp 副本执行)、解压丢执行位(chmod 自愈)、
+  stderr 诊断(消费进程退出码与错误体已进日志)
+
+当前唯一阻塞:实例上事件消费进程 exit code=5,
+stderr="did not become ready within 3s"(事件总线守护进程 3 秒就绪超时);
+切回共享登录态目录时为 not_configured(目录指向需保留 lark_cli_home 配置项)。
+
+下一步排查建议(人工,需容器内 shell):
+1. docker exec 进容器手动跑:
+   HOME=/AstrBot/data/plugin_data/astrbot_plugin_feishu_qa/lark_cli_home \
+   /AstrBot/data/plugins/astrbot_plugin_lark_cli_platform/vendor/lark-cli/linux-amd64/lark-cli \
+   event consume im.message.receive_v1 --as bot
+   观察是偶发 3s 超时(重试即可恢复)还是稳定失败。
+2. 若稳定失败:lark-cli event status 看守护进程状态;
+   确认开发者后台该应用(cli_a728800c9f789013)的"长连接"事件订阅已保存成功。
+3. 就绪超时可尝试预热:先跑一次 event status 让守护进程常驻,再启动平台。
+4. 平台实例配置中 lark_cli_home 必须指向共享目录
+   /AstrBot/data/plugin_data/astrbot_plugin_feishu_qa/lark_cli_home
+   (该键虽已从默认模板移除,仍被兼容读取;或后续把共享逻辑写死进适配器)。
+
+NOT VERIFIED:真实收消息/发消息/图片/私聊/自环/重连——全部依赖上述阻塞解除。
