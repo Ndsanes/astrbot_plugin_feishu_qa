@@ -20,7 +20,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
 from .adapter.gateway import GatewayClient
-from .answer.direct import format_direct_answer
+from .answer.direct import SOURCE_ATTRIBUTION, DirectAnswer, format_direct_answer
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
 from .corpus.parser import parse_xml
@@ -58,7 +58,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.5.0",
+    "0.6.0",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -185,7 +185,22 @@ class FeishuQaPlugin(Star):
         old = self.store.load()
         diff = diff_manifests(old, manifest)
 
-        if old and not diff["changed"] and old.get("revision_id") == doc.revision_id:
+        # 快照未变但本地图片缺失(重装/数据丢失/历史下载失败)时不得走快速
+        # 返回路径——必须继续执行下方补下载,否则图片永久缺失且无人察觉。
+        missing_images = any(
+            not (p := self.store.image_path(img["local_path"])).is_file()
+            or p.stat().st_size == 0
+            for entry in ((old or {}).get("entries") or [])
+            for img in (entry.get("images") or [])
+            if img.get("local_path")
+        )
+
+        if (
+            old
+            and not diff["changed"]
+            and old.get("revision_id") == doc.revision_id
+            and not missing_images
+        ):
             return {"status": "unchanged", "revision_id": doc.revision_id}
 
         # 下载缺失图片(单张失败不阻断)
@@ -354,29 +369,60 @@ class FeishuQaPlugin(Star):
         return result
 
     @filter.llm_tool(name="qa_send_answer")
-    async def qa_send_answer(self, event: AstrMessageEvent, entry_id: str):
-        """把与用户问题匹配的 QA 条目按文档原文(含操作截图)完整发送给用户。
+    async def qa_send_answer(self, event: AstrMessageEvent, entry_ids: str):
+        """把与用户问题匹配的一个或多个 QA 条目按文档原文(含操作截图)合并为一条消息发送给用户。
 
         当【全家桶FAQ】条目命中问题时优先使用;发送后只需简短衔接,不要复述条目内容。
 
         Args:
-            entry_id (str): QA 条目 ID,形如 qa_xxxxxxxxxxxxxxxx,取自条目标记
+            entry_ids (str): QA 条目 ID,形如 qa_xxxxxxxxxxxxxxxx,多个用英文逗号分隔,取自条目标记
         """
-        if not re.fullmatch(r"qa_[0-9a-f]{16}", entry_id or ""):
-            return "发送失败:entry_id 格式非法"
-        entry = next((e for e in self._entries if e.id == entry_id), None)
-        if entry is None:
-            return f"发送失败:{entry_id} 不在当前语料中"
+        ids = [s for s in re.split(r"[,，、;\s]+", entry_ids or "") if s.strip()]
+        entries, skipped, seen = [], [], set()
+        for raw in ids:
+            if not re.fullmatch(r"qa_[0-9a-f]{16}", raw) or raw in seen:
+                skipped.append(raw)
+                continue
+            seen.add(raw)
+            entry = next((e for e in self._entries if e.id == raw), None)
+            if entry is None:
+                skipped.append(raw)
+            else:
+                entries.append(entry)
+        if not entries:
+            bad = ",".join(skipped) if skipped else "未提供有效条目"
+            return f"发送失败:没有可投递的条目({bad})"
 
-        direct = format_direct_answer(
-            entry, store=self.store, max_images=int(self._cfg("MAX_IMAGES", 3))
+        max_imgs = int(self._cfg("MAX_IMAGES", 3))
+        parts: list[str] = []
+        image_paths: list[str] = []
+        for entry in entries:
+            d = format_direct_answer(
+                entry,
+                store=self.store,
+                max_images=max_imgs,
+                include_attribution=False,
+            )
+            parts.append(d.text)
+            image_paths.extend(d.image_paths)
+        combined = DirectAnswer(
+            text=(
+                "\n\n———\n\n".join(parts)
+                + "\n\n"
+                + SOURCE_ATTRIBUTION
+                + f"(共{len(entries)}条)"
+            ),
+            image_paths=image_paths[:9],  # 单次投递图片总量上限,防刷屏
+            entry_id=",".join(e.id for e in entries),
         )
-        await self._send_direct(event, direct)
-        n_imgs = len(direct.image_paths)
-        suffix = f"(含{n_imgs}张截图)" if n_imgs else "(纯文本)"
-        # 经 event.send 直发而非 set_result:Agent 循环保持存活,可继续多问衔接;
-        # 回执明确告知已投递原文,防止模型再复述一遍。
-        return f"已按文档原文完整发送条目《{entry.raw_title}》{suffix},请勿复述其正文。"
+        # 单次 event.send 投出整块内容;经此而非 set_result:Agent 循环保持存活,
+        # 可继续多问衔接。回执明示已投递原文,防止模型再复述一遍。
+        await self._send_direct(event, combined)
+        titles = "》《".join(e.raw_title for e in entries)
+        note = f";已跳过:{','.join(skipped)}" if skipped else ""
+        imgs = len(combined.image_paths)
+        suffix = f"(含{imgs}张截图)" if imgs else "(纯文本)"
+        return f"已合并投递{len(entries)}条文档原文{suffix}:《{titles}》{note};请勿复述其正文。"
 
     @filter.on_llm_request()
     async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:

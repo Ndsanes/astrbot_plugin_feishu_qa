@@ -16,6 +16,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from astrbot.api import logger
+
 DOC_FORMAT_XML = "xml"
 DOC_FORMAT_MARKDOWN = "markdown"
 
@@ -99,11 +101,23 @@ class GatewayClient:
         if not overwrite and output_path.is_file() and output_path.stat().st_size > 0:
             return output_path
         try:
-            saved = Path(
-                await self._require().download_media(token, output_path.parent)
+            saved_path = await self._require().download_media(
+                token, output_path.parent
             )
-        except Exception:
+        except Exception as exc:
+            # 单张失败不阻断,但必须留痕(含堆栈)——否则缺图自愈循环会静默空转
+            logger.warning(
+                "[FeishuQA] media-download 调用异常 token=%s: %s",
+                token,
+                exc,
+                exc_info=True,
+            )
             return None
+        if saved_path is None:
+            # 网关契约:失败返回 None(不抛异常);底层 CLI 报错由平台侧日志承载
+            logger.warning("[FeishuQA] media-download 失败(网关返回 None) token=%s", token)
+            return None
+        saved = Path(saved_path)
         if not saved.is_file() or saved.stat().st_size == 0:
             return None
         if saved != output_path:

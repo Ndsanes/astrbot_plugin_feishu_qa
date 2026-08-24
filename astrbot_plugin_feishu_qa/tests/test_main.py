@@ -268,22 +268,24 @@ class TestFaqCitationGuidance:
 
 
 class TestQaSendAnswer:
-    """qa_send_answer 工具:原文图文整体直发,Agent 循环保持存活。"""
+    """qa_send_answer 工具:原文图文整体直发,支持多条目合并单块投递。"""
 
     def test_tool_registered_with_docstring(self, plugin: FeishuQaPlugin) -> None:
         fn = plugin.qa_send_answer
         assert getattr(fn, "_llm_tool_name", "") == "qa_send_answer"
         doc = (fn.__doc__ or "").strip()
-        assert "Args:" in doc and "entry_id" in doc
+        assert "Args:" in doc and "entry_ids" in doc and "逗号" in doc
 
     def test_invalid_entry_rejected_without_send(
         self, plugin: FeishuQaPlugin
     ) -> None:
         event = AstrMessageEvent()
-        out = run_handler(plugin.qa_send_answer(event, entry_id="not-an-id"))
-        assert isinstance(out[0], str) and "格式非法" in out[0]
-        out = run_handler(plugin.qa_send_answer(event, entry_id="qa_" + "f" * 16))
-        assert isinstance(out[0], str) and "不在当前语料中" in out[0]
+        out = run_handler(plugin.qa_send_answer(event, entry_ids="not-an-id"))
+        assert isinstance(out[0], str) and "没有可投递" in out[0]
+        out = run_handler(plugin.qa_send_answer(event, entry_ids="qa_" + "f" * 16))
+        assert isinstance(out[0], str) and "没有可投递" in out[0]
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=""))
+        assert isinstance(out[0], str) and "没有可投递" in out[0]
         assert event.sent == [], "校验失败不得发送任何消息"
 
     def test_sends_full_entry_text_and_images(self, plugin: FeishuQaPlugin) -> None:
@@ -293,20 +295,49 @@ class TestQaSendAnswer:
         TestQaEntryImages()._seed_images(plugin, entry.images)
         event = AstrMessageEvent()
         out = run_handler(
-            plugin.qa_send_answer(event, entry_id=TestQaEntryImages.ENTRY_ID)
+            plugin.qa_send_answer(event, entry_ids=TestQaEntryImages.ENTRY_ID)
         )
         result = out[0]
-        assert isinstance(result, str) and "勿复述" in result
-        assert len(event.sent) == 1, "应恰好发送一条合并转发消息"
+        assert isinstance(result, str) and "勿复述" in result and "1条" in result
+        assert len(event.sent) == 1, "多条目也必须合并为一次发送"
         node = event.sent[0].chain[0]
         assert node.type == "Node"
         texts = [c.text for c in node.content if c.type == "Plain"]
         assert any(entry.title in t for t in texts), "正文须含条目标题原文"
 
+    def test_multi_entry_merged_into_single_send(self, plugin) -> None:
+        withimg = [e for e in plugin._entries if e.images][:2]
+        for e in withimg:
+            TestQaEntryImages()._seed_images(plugin, e.images)
+        event = AstrMessageEvent()
+        out = run_handler(
+            plugin.qa_send_answer(event, entry_ids=",".join(e.id for e in withimg))
+        )
+        assert f"已合并投递{len(withimg)}条" in out[0]
+        assert len(event.sent) == 1, "多问场景必须单块投递"
+        all_text = "".join(
+            c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
+        )
+        for e in withimg:
+            assert e.title in all_text
+        imgs = [
+            c for c in event.sent[0].chain[0].content if c.type == "Image"
+        ]
+        assert len(imgs) >= 2
+
+    def test_mixed_valid_invalid_skips_bad_ids(self, plugin) -> None:
+        good = next(e for e in plugin._entries if not e.images)
+        event = AstrMessageEvent()
+        out = run_handler(
+            plugin.qa_send_answer(event, entry_ids=f"{good.id}, bad123")
+        )
+        assert "已跳过:bad123" in out[0]
+        assert len(event.sent) == 1, "合法条目应照常投递"
+
     def test_text_only_entry_still_delivered(self, plugin: FeishuQaPlugin) -> None:
         noimg = next(e for e in plugin._entries if not e.images)
         event = AstrMessageEvent()
-        out = run_handler(plugin.qa_send_answer(event, entry_id=noimg.id))
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=noimg.id))
         assert isinstance(out[0], str) and "纯文本" in out[0]
         assert len(event.sent) == 1
 
@@ -429,3 +460,25 @@ class TestSyncWithFakeGateway:
         asyncio.run(plugin.sync_once())
         result2 = asyncio.run(plugin.sync_once())
         assert result2["status"] == "unchanged"
+
+    def test_sync_heals_missing_images(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """快照未变但图片文件丢失时,不得走 unchanged 快速路径,必须补下载。"""
+        from test_adapter import FakeGateway
+
+        xml = (FIXTURES / "qa_r8268.xml").read_text()
+        gw = FakeGateway(fetch_results={"https://my.feishu.cn/wiki/test": xml})
+        plugin = self._plugin(tmp_path, monkeypatch, gw)
+
+        assert asyncio.run(plugin.sync_once())["status"] == "synced"
+        # 模拟数据丢失:删掉全部已下载图片
+        for f in (Path(plugin.data_root) / "images").glob("*"):
+            f.unlink()
+        calls_before = len([c for c in gw.calls if c[0] == "download_media"])
+
+        result2 = asyncio.run(plugin.sync_once())
+
+        assert result2["status"] == "synced", "缺图时不得快速返回 unchanged"
+        redownloaded = len([c for c in gw.calls if c[0] == "download_media"])
+        assert redownloaded > calls_before, "必须重新发起图片下载"

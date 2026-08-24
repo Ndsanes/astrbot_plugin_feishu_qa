@@ -328,3 +328,10 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   四条规则(命中即整体投递/补图用 qa_entry_images/注明出处/禁止臆测图N)。
   基线 238→242。23:24 实测确认:kb_names=2 生效、FAQ 库四席压过手册、
   钩子注入成功(prompt_tokens 1004→1165)但小模型未主动发图——本版引导修正。
+- **platform v0.4.6 + qa 网关契约修复(图片链路三重根因)**:①qa 客户端
+  Path(网关返回) 未处理 None 契约→TypeError;②lark-cli 对 docx 内嵌图片
+  走 drive 直连必 403,正确命令是 `docs +media-preview --token <tok>`;
+  ③CLI 以 cwd 相对路径回报产物且对已存在输出退出码 2(--overwrite 不被
+  部分 子命令/版本 生效)——网关现按 dest_dir 归位路径并预清理残留。
+  连带修 sync_once 缺图自愈(unchanged 快速路径曾永久跳过补下载)。
+  终局:image_failures 110→0。诊断利器:平台侧失败 WARN 含完整 CLI JSON。

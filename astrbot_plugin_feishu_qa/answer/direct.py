@@ -31,10 +31,14 @@ def format_direct_answer(
     *,
     store: SnapshotStore | None = None,
     max_images: int = 3,
+    include_attribution: bool = True,
 ) -> DirectAnswer:
-    """组装直答:标题 + 原文 + 图片 + 来源(spec §80 的最终体验)。"""
+    """组装直答:标题 + 原文 + 图片 + 来源(spec §80 的最终体验)。
+
+    include_attribution=False 用于多条目合并投递:署名由调用方统一追加一次。
+    """
     tags_prefix = "".join(f"【{t}】" for t in entry.symptom_tags)
-    lines = ["找到一个相关问题:", "", f"{tags_prefix}{entry.title}", "", entry.body]
+    lines = [f"{tags_prefix}{entry.title}", "", entry.body]
 
     image_paths: list[str] = []
     if store is not None:
@@ -43,7 +47,8 @@ def format_direct_answer(
             if path.is_file():
                 image_paths.append(str(path))
 
-    lines.extend(["", SOURCE_ATTRIBUTION])
+    if include_attribution:
+        lines = ["找到一个相关问题:", "", *lines, "", SOURCE_ATTRIBUTION]
     return DirectAnswer(
         text="\n".join(lines).strip(),
         image_paths=image_paths,

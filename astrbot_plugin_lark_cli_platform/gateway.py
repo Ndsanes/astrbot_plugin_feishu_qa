@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from astrbot.api import logger
+
 try:  # 优先使用插件内 vendored 副本(与打包版本严格一致),缺失再退回安装版
     from .astrbot_lark_kit import (
         CliNotFoundError,
@@ -225,36 +227,50 @@ class LarkGateway:
     ) -> Path | None:
         """下载文档媒体到 dest_dir,返回本地路径;失败返回 None(不抛异常)。
 
-        先走 drive +preview(source_file)(文档禁下时仍可取图),失败退回 +download。
+        依次尝试:drive +preview(source_file)→ drive +download →
+        docs +media-preview(文档内嵌媒体专用,drive 直连 403 时仍可取图)。
         """
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
         # lark-cli 要求 --output 为 cwd 内相对路径
         out_name = f"./{file_token.replace('/', '_')}"
+        # 预清理历史残留产物:lark-cli 对已存在输出直接退出码 2(部分版本/子命令
+        # 连 --overwrite 都不生效),而调用方只在目标文件缺失时才会走到这里,
+        # 删除 token 命名的临时产物是安全幂等语义。
+        stale = dest_dir / Path(out_name).name
+        if stale.exists():
+            stale.unlink()
+
+        def _drive_cmd(kind: str) -> list[str]:
+            return [
+                "drive",
+                kind,
+                "--as",
+                "user",
+                "--file-token",
+                file_token,
+                *(
+                    ["--type", "source_file"]
+                    if kind == "+preview"
+                    else []
+                ),
+                "--output",
+                out_name,
+            ]
+
         commands = (
+            _drive_cmd("+preview"),
+            _drive_cmd("+download"),
+            # 文档内嵌图片/附件:走文档媒体预览通道(drive 直连会 403)
             [
-                "drive",
-                "+preview",
+                "docs",
+                "+media-preview",
                 "--as",
                 "user",
-                "--file-token",
-                file_token,
-                "--type",
-                "source_file",
-                "--output",
-                out_name,
-                *(["--overwrite"] if overwrite else []),
-            ],
-            [
-                "drive",
-                "+download",
-                "--as",
-                "user",
-                "--file-token",
+                "--token",
                 file_token,
                 "--output",
                 out_name,
-                *(["--overwrite"] if overwrite else []),
             ],
         )
         envelope: Any = None
@@ -276,9 +292,21 @@ class LarkGateway:
         if envelope is None:
             if isinstance(last_exc, CliNotFoundError):
                 raise _wrap(last_exc)
+            # 失败留痕:此前静默返回 None 导致下游无法诊断(如缺图自愈空转)
+            logger.warning(
+                "[lark_cli] media-download 两种方式均失败 token=%s: %s: %s",
+                file_token,
+                type(last_exc).__name__ if last_exc else "NoError",
+                last_exc,
+            )
             return None
         saved = envelope.data.get("saved_path") if isinstance(envelope.data, dict) else None
-        path = Path(str(saved)) if saved else dest_dir / Path(out_name).name
+        # CLI 以 cwd 相对路径回报产物;AstrBot 进程 CWD ≠ dest_dir,必须归位
+        path = (
+            Path(str(saved))
+            if Path(str(saved)).is_absolute() and Path(str(saved)).is_file()
+            else dest_dir / Path(out_name).name
+        )
         return path if path.is_file() and path.stat().st_size > 0 else None
 
     # ── 登录态 ──
