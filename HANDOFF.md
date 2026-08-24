@@ -305,3 +305,15 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   (原行为不变)+ 完整 UMO(按事件 unified_msg_origin 精确匹配);管理员拒绝诊断
   现附当前会话 UMO 供直接复制。测试桩统一补 unified_msg_origin 属性(修 platform
   桩先载 sys.modules 污染 qa 用例的形状漂移),根套件基线 223→226。已部署实例。
+- **qa v0.4.0(规格书落地:QA 图片按需发送)**:Agent 命中带图 QA 后经
+  `qa_entry_images(entry_id)` 从本地已同步图片直发截图——有效条目返回
+  MessageEventResult 走核心 tool_direct_result 通道(直发并终止 Agent),
+  无效条目回错误文本给 LLM 继续;零网络零飞书调用。**连带修复**
+  search_feishu_qa 返回值契约(旧 yield plain_result 会直发原始 JSON 并
+  终止 Agent,线上从未调用过故未暴露)。KB 导出脚本 tools/export_kb_chunks.py
+  (breadcrumb+截图标记,文档字段名是 file_name、chunks 是字符串列表);
+  标记语料已导入实例空库"音频软件全家桶 FAQ"(41 chunks),原话检索 Top-1
+  相关度 0.981 且标记 entry_id 与线上语料全对齐。基线 226→235。
+  待用户实测:真实群里 @bot 问 FAQ 问题,观察 astr_kb_search 命中 FAQ 库 +
+  Agent 是否调用 qa_entry_images 直发截图;kb_names 加"音频软件全家桶 FAQ"
+  需 WebUI 勾选(PUT system-config 会回滚该键,不能代改)。
