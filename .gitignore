@@ -16,3 +16,4 @@ tmp/
 
 # 管理员 JWT 本地缓存
 .astrbot_jwt_cache
+HANDOFF.md
