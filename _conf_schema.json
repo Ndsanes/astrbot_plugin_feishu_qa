@@ -19,28 +19,11 @@
     "hint": "可使用 /qa_sync /qa_reload /learn 等管理指令",
     "default": []
   },
-  "ADMIN_OPEN_ID": {
-    "description": "管理员飞书 open_id(登录态失效时经网关私聊推送授权链接)",
-    "type": "string",
-    "hint": "ou_xxx 开头;可在飞书 QA 会话中发送 /qa_status 查看",
-    "default": ""
-  },
   "SYNC_INTERVAL_HOURS": {
     "description": "自动同步间隔(小时)",
     "type": "int",
     "hint": "0 = 关闭自动同步",
     "default": 12
-  },
-  "AUTH_CHECK_HOURS": {
-    "description": "登录态健康检查间隔(小时)",
-    "type": "int",
-    "hint": "0 = 关闭检查",
-    "default": 12
-  },
-  "AUTH_WARNING_HOURS": {
-    "description": "登录态剩余多久视为即将过期",
-    "type": "int",
-    "default": 48
   },
   "ATTACH_IMAGES": {
     "description": "回答时附带文档截图",
@@ -80,4 +63,3 @@
     "default": ""
   }
 }
-

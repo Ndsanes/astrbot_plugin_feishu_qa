@@ -16,11 +16,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PLUGIN_ROOT.parent))  # workspace 根(astrbot_lark_kit)
 
 from astrbot_plugin_feishu_qa.corpus.builder import (  # noqa: E402
     build_manifest,

@@ -18,7 +18,6 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
-from .adapter.auth import AuthKeeper
 from .adapter.gateway import GatewayClient
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
@@ -41,7 +40,7 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.3.0",
+    "0.3.1",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -57,9 +56,6 @@ class FeishuQaPlugin(Star):
             doc_ref=self._cfg("WIKI_URL") or DEFAULT_WIKI_URL,
             resolver=self._get_gateway,
         )
-        self.keeper = AuthKeeper(
-            self.adapter, warning_hours=float(self._cfg("AUTH_WARNING_HOURS", 48))
-        )
 
         self._entries: list = []
         self._retriever: Retriever | None = None
@@ -68,8 +64,6 @@ class FeishuQaPlugin(Star):
 
         self._pending_learn: dict[str, dict] = {}  # user_id -> candidate
         self._sync_task: asyncio.Task | None = None
-        self._auth_task: asyncio.Task | None = None
-        self._poll_task: asyncio.Task | None = None
 
     def _get_gateway(self):
         """返回 lark_cli 平台适配器的网关对象;未就绪时返回 None(调用方优雅降级)。"""
@@ -141,15 +135,9 @@ class FeishuQaPlugin(Star):
             )
         if int(self._cfg("SYNC_INTERVAL_HOURS", 12)) > 0:
             self._sync_task = asyncio.create_task(self._sync_loop())
-        if int(self._cfg("AUTH_CHECK_HOURS", 12)) > 0:
-            self._auth_task = asyncio.create_task(self._auth_loop())
 
     async def terminate(self) -> None:
-        for task in (
-            self._sync_task,
-            self._auth_task,
-            getattr(self, "_poll_task", None),
-        ):
+        for task in (self._sync_task,):
             if task:
                 task.cancel()
 
@@ -168,55 +156,6 @@ class FeishuQaPlugin(Star):
                 logger.warning("[FeishuQA] 同步失败(旧语料继续服务): %s", exc)
             await asyncio.sleep(interval)
 
-    async def _auth_loop(self) -> None:
-        interval = int(self._cfg("AUTH_CHECK_HOURS", 12)) * 3600
-
-        async def notify(message: str) -> None:
-            logger.warning("[FeishuQA][AUTH] %s", message)
-            await self._send_reauth_card(message)
-
-        while True:
-            try:
-                health, notified = await self.keeper.check(notify)
-                if notified:
-                    logger.info("[FeishuQA] 已发送登录态提醒: %s", health.value)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("[FeishuQA] auth 检查异常: %s", exc)
-            await asyncio.sleep(interval)
-
-    async def _send_reauth_card(self, reason: str) -> bool:
-        """发起 Device Flow 并经网关以 bot 身份私聊推送授权链接。"""
-        admin_open_id = str(self._cfg("ADMIN_OPEN_ID", "") or "")
-        if not admin_open_id:
-            logger.info("[FeishuQA] 未配置 ADMIN_OPEN_ID,跳过授权推送")
-            return False
-
-        initiated = await self.adapter.auth_login_start()
-        if not initiated:
-            logger.warning("[FeishuQA] 发起设备授权失败,跳过推送")
-            return False
-
-        expires_in = int(initiated.get("expires_in") or 600)
-        text = (
-            "[飞书QA] 登录态需要重新授权\n"
-            f"原因:{reason.splitlines()[0]}\n"
-            f"请在 {max(1, expires_in // 60)} 分钟内打开链接完成扫码/确认:\n"
-            f"{initiated['verification_url']}"
-        )
-        sent_ok = await self.adapter.send_text(admin_open_id, text)
-        logger.info("[FeishuQA] 授权链接推送%s", "成功" if sent_ok else "失败")
-        if not sent_ok:
-            return False
-
-        # 后台等管理员完成授权;成功即恢复同步能力
-        async def _poll() -> None:
-            ok = await self.adapter.auth_login_finish(initiated["device_code"])
-            logger.info("[FeishuQA] 授权流程%s", "已完成" if ok else "超时未完成")
-
-        self._poll_task = asyncio.create_task(_poll())
-        return True
 
     async def sync_once(self) -> dict:
         """抓取→解析→下载缺失图→原子提交→热替换检索器。"""
@@ -343,7 +282,7 @@ class FeishuQaPlugin(Star):
 
     @filter.command("qa_status")
     async def qa_status(self, event: AstrMessageEvent):
-        """查看同步与登录态状态(管理员)。"""
+        """查看同步与网关接入状态(管理员)。"""
         if not self._is_admin(event):
             yield event.plain_result("仅管理员可用")
             return
@@ -351,7 +290,7 @@ class FeishuQaPlugin(Star):
         if self.adapter.available:
             gateway_line = "lark_cli 网关: 已接入"
         else:
-            gateway_line = "lark_cli 网关: 未接入(飞书拉取/授权不可用)"
+            gateway_line = "lark_cli 网关: 未接入(飞书拉取不可用)"
 
         def _fmt_revision(value: object) -> str:
             if isinstance(value, str):
@@ -365,13 +304,6 @@ class FeishuQaPlugin(Star):
             f"图片数量: {manifest.get('image_count', 0)}",
             f"最后构建: {manifest.get('built_at', '无')}",
         ]
-        try:
-            status = await self.adapter.auth_status()
-            token = status.user.token_status or "未知"
-            lines.append(f"user 登录态: {token} ({status.user_display})")
-            lines.append(f"bot 身份: {'可用' if status.bot_available else '不可用'}")
-        except Exception as exc:
-            lines.append(f"登录态检查失败: {exc}")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("qa_sync")
@@ -396,40 +328,6 @@ class FeishuQaPlugin(Star):
         ok = self._load_corpus()
         yield event.plain_result("语料已重新加载" if ok else "语料加载失败")
 
-    @filter.command("qa_auth_login")
-    async def qa_auth_login(self, event: AstrMessageEvent):
-        """/qa_auth_login:发起 Device Flow 扫码授权(管理员;经 lark_cli 网关)。"""
-        if not self._is_admin(event):
-            yield event.plain_result("仅管理员可用")
-            return
-
-        if self._poll_task is not None and not self._poll_task.done():
-            yield event.plain_result("已有授权流程进行中,请先完成或稍后再试")
-            return
-
-        if not self.adapter.available:
-            yield event.plain_result(
-                "lark_cli 平台未加载,无法发起授权;请先启用 lark_cli 平台适配器。"
-            )
-            return
-
-        initiated = await self.adapter.auth_login_start()
-        if not initiated:
-            yield event.plain_result("发起授权失败,请查看服务端日志")
-            return
-
-        expires_in = int(initiated.get("expires_in") or 600)
-        url = initiated["verification_url"]
-        yield event.plain_result(
-            f"请在 {max(1, expires_in // 60)} 分钟内打开链接并扫码/确认授权:\n{url}\n"
-            "完成后发送 /qa_status 确认登录态。"
-        )
-
-        async def _poll() -> None:
-            ok = await self.adapter.auth_login_finish(initiated["device_code"])
-            logger.info("[FeishuQA] 授权流程%s", "已完成" if ok else "超时未完成")
-
-        self._poll_task = asyncio.create_task(_poll())
 
     @filter.command("learn")
     async def learn(self, event: AstrMessageEvent):
