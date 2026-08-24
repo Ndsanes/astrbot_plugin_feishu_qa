@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from astrbot_lark_kit.cli import (
+    apply_identity,
     find_bundled_cli,
     resolve_cli_bin,
     run_lark_cli,
@@ -199,3 +200,56 @@ class TestRunCliJson:
 
         with pytest.raises(CliInvalidOutputError):
             await run_lark_cli_json(["x"], env={"LARK_CLI_PATH": str(script)})
+
+
+def make_argv_echo_cli(tmp_path: Path) -> Path:
+    """生成回显自身 argv 的假 lark-cli(envelope data.argv)。"""
+    script = tmp_path / "echo-lark-cli.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "print(json.dumps({'ok': True, 'identity': 'user',"
+        " 'data': {'argv': sys.argv[1:]}}))\n",
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return script
+
+
+class TestApplyIdentity:
+    def test_末尾追加as旗标(self) -> None:
+        assert apply_identity(["im", "+messages-send", "--text", "hi"], "bot") == [
+            "im",
+            "+messages-send",
+            "--text",
+            "hi",
+            "--as",
+            "bot",
+        ]
+
+    def test_none原样返回(self) -> None:
+        args = ["docs", "+fetch", "--doc", "d"]
+        assert apply_identity(args, None) is args
+
+    def test拒绝未知身份(self) -> None:
+        with pytest.raises(ValueError, match="未知身份"):
+            apply_identity(["api", "GET", "/x"], "admin")
+
+    async def test_run_lark_cli注入user身份(self, tmp_path: Path) -> None:
+        fake = make_argv_echo_cli(tmp_path)
+        envelope = await run_lark_cli(
+            ["wiki", "+node-list"], bin_path=fake, identity="user"
+        )
+        assert envelope.data["argv"][-2:] == ["--as", "user"]
+
+    async def test_run_lark_cli缺省不注入(self, tmp_path: Path) -> None:
+        fake = make_argv_echo_cli(tmp_path)
+        envelope = await run_lark_cli(["wiki", "+node-list"], bin_path=fake)
+        assert "--as" not in envelope.data["argv"]
+
+    async def test_run_lark_cli_json注入bot身份(self, tmp_path: Path) -> None:
+        fake = make_argv_echo_cli(tmp_path)
+        obj = await run_lark_cli_json(
+            ["whoami"], env={"LARK_CLI_PATH": str(fake)}, identity="bot"
+        )
+        assert obj["data"]["argv"] == ["whoami", "--as", "bot"]

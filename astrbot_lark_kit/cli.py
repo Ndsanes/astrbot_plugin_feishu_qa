@@ -30,6 +30,20 @@ from .errors import (
 from .rate_limit import RateLimiter
 
 DEFAULT_TIMEOUT_S = 30.0
+IDENTITY_CHOICES: tuple[str, ...] = ("bot", "user")
+
+
+def apply_identity(args: list[str], identity: str | None) -> list[str]:
+    """把 ``--as <identity>`` 追加到命令参数末尾(cobra 旗标与位置无关)。
+
+    identity 为 None 时原样返回(不注入,身份由 CLI defaultAs=auto 解析——
+    双身份并存时通常解析为 user,调用方需要确定性时必须显式传入)。
+    """
+    if identity is None:
+        return args
+    if identity not in IDENTITY_CHOICES:
+        raise ValueError(f"未知身份 {identity!r},可选: {'|'.join(IDENTITY_CHOICES)}")
+    return [*args, "--as", identity]
 
 
 
@@ -137,8 +151,12 @@ async def run_lark_cli(
     bin_path: Path | None = None,
     cwd: str | None = None,
     extra_env: dict[str, str] | None = None,
+    identity: str | None = None,
 ) -> LarkEnvelope:
     """spawn lark-cli 并返回解析后的 envelope(envelope 形态命令)。
+
+    identity 非 None 时在参数末尾追加 ``--as <identity>`` 钉死身份;缺省 None
+    不注入(CLI defaultAs=auto 自行解析,双身份并存时倾向 user)。
 
     Raises:
         CliNotFoundError: 二进制不存在。
@@ -151,7 +169,9 @@ async def run_lark_cli(
     if limiter is not None:
         await limiter.acquire()
 
-    stdout, _ = await _spawn(args, binary, timeout_s, cwd=cwd, extra_env=extra_env)
+    stdout, _ = await _spawn(
+        apply_identity(args, identity), binary, timeout_s, cwd=cwd, extra_env=extra_env
+    )
     envelope = parse_envelope(stdout.decode("utf-8", errors="replace"))
     if not envelope.ok:
         raise _classify_failure(envelope)
@@ -167,13 +187,19 @@ async def run_lark_cli_json(
     bin_path: Path | None = None,
     cwd: str | None = None,
     extra_env: dict[str, str] | None = None,
+    identity: str | None = None,
 ) -> dict[str, Any]:
-    """spawn lark-cli 并解析裸 JSON 输出(auth status 等非 envelope 命令)。"""
+    """spawn lark-cli 并解析裸 JSON 输出(auth status 等非 envelope 命令)。
+
+    identity 语义同 :func:`run_lark_cli`。
+    """
     binary = bin_path or resolve_cli_bin(env=env)
     if limiter is not None:
         await limiter.acquire()
 
-    stdout, _ = await _spawn(args, binary, timeout_s, cwd=cwd, extra_env=extra_env)
+    stdout, _ = await _spawn(
+        apply_identity(args, identity), binary, timeout_s, cwd=cwd, extra_env=extra_env
+    )
     try:
         obj = json.loads(stdout.decode("utf-8", errors="replace"))
     except json.JSONDecodeError as exc:

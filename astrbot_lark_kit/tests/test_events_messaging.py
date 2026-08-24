@@ -55,7 +55,18 @@ def test_归一化_私聊与bot自身():
 def test_归一化_非目标事件与坏输入返回None():
     assert normalize_event({"type": "im.chat.disbanded_v1"}) is None
     assert normalize_event("not a dict") is None
-    assert normalize_event(None) is None
+
+
+@pytest.mark.asyncio
+async def test_send_card组装interactive参数():
+    m = CapturingMessenger()
+    card = {"elements": [{"tag": "div"}]}
+    await m.send_card("oc_chat1", card)
+    args = m.sent[0]
+    assert args[args.index("--msg-type") + 1] == "interactive"
+    import json as _json
+
+    assert _json.loads(args[args.index("--content") + 1]) == card
 
 
 def test_归一化_可选字段缺失不丢事件():
@@ -200,3 +211,58 @@ async def test_send_非法target拒绝():
     m = CapturingMessenger()
     with pytest.raises(ValueError, match="oc_|ou_"):
         await m.send_text("123456", "hi")
+
+
+@pytest.mark.asyncio
+async def test_send_env注入子进程_修复HOME不达(tmp_path):
+    """回归:run_lark_cli 的 env 只用于二进制解析,未注入子进程环境,
+    导致发送侧 HOME 登录态丢失(lark-cli not_configured)。"""
+    import stat
+
+    script = tmp_path / "show-home.sh"
+    script.write_text(
+        '#!/bin/sh\nprintf \'{"ok":true,"data":{"home":"%s"}}\' "$HOME"\n'
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    m = LarkMessenger(binary=script, env={"HOME": "/custom/state"})
+    env_obj = await m.send_text("oc_chat1", "hi")
+    assert env_obj.data["home"] == "/custom/state"
+
+
+@pytest.mark.asyncio
+async def test_terminate先关stdin且不被挂起(tmp_path):
+    """回归:保活场景下 _terminate 必须先 close() 再限时等 wait_closed。"""
+    from astrbot_lark_kit.events import EventStream
+
+    class FakeStdin:
+        def __init__(self):
+            self.closed = False
+
+        def is_closing(self):
+            return self.closed
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            await asyncio.sleep(999)  # 若未先 close,将永久挂起
+
+        def __getattr__(self, name):
+            raise AttributeError(name)
+
+    class FakeProc:
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stdout = None
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    home = tmp_path / "lh"
+    home.mkdir()
+    stream = EventStream(binary=tmp_path / "fake-cli", state_home=home)
+    proc = FakeProc()
+    stream._proc = proc
+    await asyncio.wait_for(stream._terminate(), timeout=5)  # 不应超时
+    assert proc.stdin.closed

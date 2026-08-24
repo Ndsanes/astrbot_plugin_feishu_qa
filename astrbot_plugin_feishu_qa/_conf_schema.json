@@ -19,28 +19,11 @@
     "hint": "可使用 /qa_sync /qa_reload /learn 等管理指令",
     "default": []
   },
-  "ADMIN_OPEN_ID": {
-    "description": "管理员飞书 open_id(登录态失效时推送授权卡片)",
-    "type": "string",
-    "hint": "ou_xxx 开头;lark-cli auth status 可查",
-    "default": ""
-  },
   "SYNC_INTERVAL_HOURS": {
     "description": "自动同步间隔(小时)",
     "type": "int",
     "hint": "0 = 关闭自动同步",
     "default": 12
-  },
-  "AUTH_CHECK_HOURS": {
-    "description": "登录态健康检查间隔(小时)",
-    "type": "int",
-    "hint": "0 = 关闭检查",
-    "default": 12
-  },
-  "AUTH_WARNING_HOURS": {
-    "description": "登录态剩余多久视为即将过期",
-    "type": "int",
-    "default": 48
   },
   "ATTACH_IMAGES": {
     "description": "回答时附带文档截图",
@@ -77,16 +60,6 @@
     "description": "/learn 写回目标文档链接(副本文档;留空 = 关闭写回,候选仅落盘)",
     "type": "string",
     "hint": "强烈建议填一份生产 Q&A 文档的副本,验证无误后再人工切换",
-    "default": ""
-  },
-  "FEISHU_APP_ID": {
-    "description": "飞书应用 App ID(可选;填写后插件自动完成 lark-cli config init,无需手动配置)",
-    "type": "string",
-    "default": ""
-  },
-  "FEISHU_APP_SECRET": {
-    "description": "飞书应用 App Secret(与上面的 App ID 配套)",
-    "type": "string",
     "default": ""
   }
 }

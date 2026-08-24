@@ -118,6 +118,7 @@ api.post("/api/v1/plugins/reload", json={})
 ```
 
   命令行探测：`python3 astrbot_api.py plugins`。Key 过期前 ≤7 天、已过期、以及 401 时会打印更新提醒（抛 `ApiKeyExpired`）。
+- **⚠️ 禁止对 `PUT /api/v1/system-config` 做"GET→修改→PUT 全量回写"**（2026-08-24 确诊，已三次触发 WebUI"旧版本密码存储"提示并一度锁死登录）：该端点是全量替换语义（源码 `update_profile`: "Complete replacement config content"，落盘整节覆盖），而 GET 返回的 `dashboard` 节剥离了 `username/password/pbkdf2_password/jwt_secret` 敏感键——回写即抹掉凭据；`kb_names` 被静默回滚也是同一机制。改实例配置一律走局部端点（bots/plugins/kb 各自 API）。发版部署前跑 `python3 astrbot_api.py health` 检查仪表盘凭据完整性（检查 stats 升级标志 + dashboard.username 是否存在）。若凭据已被抹（login 500 / PATCH 报原密码错误）：API 层无解，需重启容器让 loader 重新生成初始密码（打印在启动日志），再 login + `PATCH /auth/account` 改回 .env 凭据。
 - 本地 API 规范：[.reference/astrbot-openapi.json](.reference/astrbot-openapi.json)（224 个端点，来自实例 `/api/v1/openapi.json`；Scalar 文档页 `https://docs.astrbot.app/scalar.html` 只是渲染壳）。查端点：
 
 ```bash

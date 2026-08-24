@@ -19,12 +19,13 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .errors import CliExecutionError
+from .state import ensure_short_home
 
 __all__ = ["EventStream", "NormalizedLarkMessage", "normalize_event"]
 
@@ -130,6 +131,7 @@ class EventStream:
         *,
         binary: Path,
         state_home: Path | None = None,
+        alias_root: Path | None = None,
         extra_env: dict[str, str] | None = None,
         event_key: str = _EVENT_KEY,
         max_backoff_s: float = _BACKOFF_MAX_S,
@@ -140,8 +142,15 @@ class EventStream:
 
         self._binary = Path(binary)
         child_env = {**os.environ}
+        alias_note: str = ""
         if state_home is not None:
-            child_env["HOME"] = str(state_home)
+            runtime_home = ensure_short_home(
+                state_home,
+                alias_root=alias_root if alias_root is not None else Path("/tmp"),
+            )
+            if runtime_home != state_home:
+                alias_note = f"登录态路径过深,子进程 HOME 使用别名 {runtime_home} -> {state_home}"
+            child_env["HOME"] = str(runtime_home)
         if extra_env:
             child_env.update(extra_env)
         self._env = child_env
@@ -149,6 +158,8 @@ class EventStream:
         self._max_backoff = max_backoff_s
         self._max_restarts = max_restarts
         self._log = log_cb or (lambda _msg: None)
+        if alias_note:
+            self._log(alias_note)
         self._dedup = _Deduper()
         self._proc: asyncio.subprocess.Process | None = None
 
@@ -166,6 +177,13 @@ class EventStream:
         proc, self._proc = self._proc, None
         if proc is None:
             return
+        # lark-cli consume 以 stdin EOF 为退出信号:先关 stdin 走优雅清理路径,
+        # 避免跳过 cleanup 泄漏服务端订阅;terminate 仅作超时兜底。
+        if proc.stdin is not None and not proc.stdin.is_closing():
+            proc.stdin.close()
+        if proc.stdin is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.stdin.wait_closed(), timeout=3)
         if proc.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 proc.terminate()
@@ -191,6 +209,7 @@ class EventStream:
                 try:
                     self._proc = await asyncio.create_subprocess_exec(
                         *self._spawn_args(),
+                        stdin=asyncio.subprocess.PIPE,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         env=self._env,
@@ -225,12 +244,10 @@ class EventStream:
                     code = self._proc.returncode
                     err_tail = b""
                     if self._proc is not None and self._proc.stderr is not None:
-                        try:
+                        with contextlib.suppress(Exception):
                             err_tail = await asyncio.wait_for(
                                 self._proc.stderr.read(65536), timeout=5
                             )
-                        except Exception:
-                            pass
                     await self._terminate()
                     if self._log:
                         self._log(
@@ -239,13 +256,6 @@ class EventStream:
                         )
                     if code not in (None, 0):
                         self._log(f"consumer 非零退出 code={code}")
-                    if self._log:
-                        err_tail = b""
-                        if self._proc is not None and self._proc.stderr is not None:
-                            try:
-                                err_tail = self._proc.stderr._transport.get_pipe_transport() and b"" or b""
-                            except Exception:
-                                err_tail = b""
                 # 停止路径:GeneratorExit 已向上传播,不会到达这里;
                 # 到达此处说明是 EOF/非零退出 → 判断是否重启
                 if self._max_restarts is not None and restarts >= self._max_restarts:

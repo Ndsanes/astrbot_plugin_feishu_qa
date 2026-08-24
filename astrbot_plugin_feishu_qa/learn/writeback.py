@@ -2,7 +2,7 @@
 
 职责边界:
 - 纯逻辑:写回 markdown 构造、目标文档查重、条目 ID 对齐;
-- 实际写入由 adapter.append_doc_content 执行(一次完整 block 提交);
+- 实际写入经 GatewayClient 转发网关 append_doc(一次完整 block 提交);
 - 原子性语义:本地完整构造 → 本地校验 → 单次 append;
   失败时不继续后续内容、候选保留、不得预先标记已学习。
 

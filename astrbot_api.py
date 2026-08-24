@@ -245,7 +245,41 @@ class AstrBotClient:
 if __name__ == "__main__":
     client = AstrBotClient()
     endpoint = sys.argv[1] if len(sys.argv) > 1 else "plugins"
-    if endpoint == "logs":
+    if endpoint == "health":
+        # python3 astrbot_api.py health  — 仪表盘凭据健康检查(发版前跑一次)
+        problems: list[str] = []
+        try:
+            stats = client.get("/api/v1/stats/version").get("data", {})
+            for key, bad in (("password_upgrade_required", True), ("md5_pwd_hint", True)):
+                if stats.get(key) == bad:
+                    problems.append(f"stats.version.{key}={stats.get(key)}")
+        except RuntimeError as exc:
+            print(f"[warn] stats/version 不可用: {exc}")
+            stats = {}
+        try:
+            dash = (
+                client.get("/api/v1/system-config")
+                .get("data", {})
+                .get("config", {})
+                .get("dashboard", {})
+            )
+        except RuntimeError as exc:
+            print(f"[warn] system-config 不可用: {exc}")
+            dash = None
+        if dash is None:
+            problems.append("system-config 读取失败(凭据或权限异常)")
+        elif "username" not in dash:
+            problems.append("system-config.dashboard.username 缺失(密码登录已坏,需带外修复)")
+        elif not dash.get("password_storage_upgraded", True):
+            problems.append("password_storage_upgraded=false(将弹出安全升级提示)")
+        print(f"version={stats.get('version')}")
+        if problems:
+            print("[FAIL] 仪表盘凭据异常:")
+            for p in problems:
+                print(f"  - {p}")
+            sys.exit(1)
+        print("[ok] 凭据状态正常")
+    elif endpoint == "logs":
         # python3 astrbot_api.py logs [过滤关键词] [条数]
         pattern = sys.argv[2] if len(sys.argv) > 2 else ""
         limit = int(sys.argv[3]) if len(sys.argv) > 3 else 100

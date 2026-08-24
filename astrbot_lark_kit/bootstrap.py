@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import tarfile
@@ -122,10 +123,8 @@ def ensure_bundled_cli(
             and _installed_version(plat_dir) == version
         ):
             # 幂等跳过前仍确保可执行位(某些解压器会丢失权限)
-            try:
+            with contextlib.suppress(OSError):
                 binary.chmod(binary.stat().st_mode | 0o111)
-            except OSError:
-                pass
             continue
         needed.append((plat, binary))
     if not needed:

@@ -77,7 +77,7 @@ async def test_deliver_chain_swallows_cli_failure(caplog):
 
 def _adapter_with_messenger(messenger):
     adapter = LarkCliPlatform(
-        {"lark_cli_home": "", "bootstrap_cli": False, "enabled_chats": []}, {}, event_queue=None
+        {"lark_cli_home": "", "bootstrap_cli": False}, {}, event_queue=None
     )
     adapter._messenger = messenger
     return adapter
@@ -98,3 +98,22 @@ async def test_send_by_session_p2p_target():
     session = MessageSesion(session_id="ou_user9")
     await adapter.send_by_session(session, MessageChain(chain=[Plain("dm")]))
     assert messenger.calls == [("text", "ou_user9", "dm")]
+
+
+async def test_send_streaming聚合全文一次性下发():
+    async def stream():
+        yield MessageChain(chain=[Plain("你"), Plain("好")])
+        yield MessageChain(chain=[Plain("！")])
+
+    messenger = FakeMessenger()
+    await make_event(messenger).send_streaming(stream())
+    assert messenger.calls == [("text", "oc_chat", "你好！")]
+
+
+async def test_send_streaming空聚合跳过():
+    async def empty_stream():
+        yield MessageChain(chain=[])
+
+    messenger = FakeMessenger()
+    await make_event(messenger).send_streaming(empty_stream())
+    assert messenger.calls == []

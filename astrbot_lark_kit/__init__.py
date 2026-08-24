@@ -10,6 +10,8 @@ from .bootstrap import (
     ensure_bundled_cli,
 )
 from .cli import (
+    IDENTITY_CHOICES,
+    apply_identity,
     bundled_cli_platform,
     find_bundled_cli,
     resolve_cli_bin,
@@ -29,9 +31,9 @@ from .errors import (
 from .events import EventStream, NormalizedLarkMessage, normalize_event
 from .messaging import LarkMessenger
 from .rate_limit import RateLimiter
-from .state import resolve_state_home
+from .state import ensure_bot_credentials, ensure_short_home, resolve_state_home
 
-__version__ = "0.2.0"
+__version__ = "0.2.6"
 
 __all__ = [
     "DEFAULT_CLI_VERSION",
@@ -65,6 +67,10 @@ __all__ = [
     "resolve_cli_bin",
     "resolve_platform_instance",
     "resolve_state_home",
+    "ensure_bot_credentials",
+    "ensure_short_home",
+    "IDENTITY_CHOICES",
     "run_lark_cli",
     "run_lark_cli_json",
+    "apply_identity",
 ]

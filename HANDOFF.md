@@ -66,3 +66,202 @@ stderr="did not become ready within 3s"(事件总线守护进程 3 秒就绪超�
    (该键虽已从默认模板移除,仍被兼容读取;或后续把共享逻辑写死进适配器)。
 
 NOT VERIFIED:真实收消息/发消息/图片/私聊/自环/重连——全部依赖上述阻塞解除。
+
+## 阻塞已解除（v1.3，2026-08-24 12:25）
+
+### 补丁（12:37，v0.1.2）
+- 事件订阅开通后首条真实消息已进入适配器，但 `meta()` 崩在
+  `PlatformMetadata` 缺少 `id` 参数（AstrBot 4.27+ 签名变更）。已修复并部署
+  v0.1.2，consumer pid=20204 运行中。待群内再次发消息验证完整收发。
+
+### 补丁（12:53，kit v0.2.2）
+- 发送侧报 not_configured(退出码 3):`run_lark_cli` 的 env 参数只用于二进制
+  解析,子进程环境走 extra_env,messaging 未传导致 HOME 丢失。已在
+  LarkMessenger._send 将 env 同时以 extra_env 注入(kit v0.2.2),附回归测试。
+  核心白名单已加入 lark_cli:FriendMessage:oc_23084736ab8557c98dea79d0c0e23846。
+  consumer pid=20422 运行中;待再次发消息验证回复送达。
+
+### 补丁（13:03，v0.1.3）
+- 群聊消息不回:正文带"@插件Bot "前缀导致命令解析失败。convert_message 现在
+  对群聊剥离开头 @提及(私聊不动)。核心白名单已加群会话
+  lark_cli:GroupMessage:oc_5ffa089f003c61a817e845dfcf8bf8d1。
+  consumer pid=20572 运行中;待群内再测。
+
+**exit=5 根因**：lark-cli 事件总线在 `<HOME>/.lark-cli/events/<appId>/bus.sock` 建
+Unix domain socket，Linux 内核限制 AF_UNIX 路径 ≤108 字节；实例数据卷路径过深
+（feishu_qa 共享目录形态 111 字符、平台插件自身目录 119 字符），bind 必然失败，
+守护进程无法就绪。与登录态指向哪个插件目录无关，升级 lark-cli 1.0.89 也无修复。
+
+**修复链（kit v0.2.1 + 平台插件 v0.1.1，均已部署实例）**：
+1. `ensure_short_home`：HOME 路径过深时给子进程用 /tmp 定名 symlink 别名
+   （bind 只查传入字符串长度，不解析 symlink），物理数据仍在自己 data 目录。
+2. `ensure_bot_credentials`：bot 凭据从平台实例配置的 app_id/app_secret 播种为
+   file 型 secret 源（0600），幂等；TAT 由 lark-cli 自管。不跨插件共享登录态。
+3. EventStream 子进程持 stdin PIPE——lark-cli consume 把 stdin EOF 当退出信号，
+   守护进程环境必须保持 stdin 打开；_terminate 先关 stdin 走优雅清理。
+
+**实例验证**：12:25:30 起 consumer pid=20031 持续运行无退出（此前每 ~1s 必死）。
+本地全套 188 passed / ruff 全绿。
+
+剩余人工事项：
+1. 飞书开发者后台为 cli_a728800c9f789013 开通 im.message.receive_v1 长连接事件订阅
+   （日志中 console precheck 报 access denied 即此）。
+2. 真实收发/图片/私聊/自环/重连实测仍 NOT VERIFIED。
+3. feishu_qa 的 requirements 仍钉 kit v0.2.0（其未用 events/messaging，暂无碍）；
+   下次动 feishu_qa 时升到 v0.2.1。
+
+## 飞书网关收口工程（2026-08-24 下午启动）
+
+**架构决策（用户两轮纠偏后定型）**：认证、登录态、TAT 刷新、限速全部收口在
+astrbot_plugin_lark_cli_platform；其他插件**不得**读它的 data 目录、解析
+.lark-cli/config.json 或自持 app_id/app_secret，必须走 AstrBot 正式插件间交互：
+`context.platform_manager.get_insts()` 找 `meta().name == "lark_cli"` 的适配器实例，
+调用其 `gateway` 属性（LarkGateway，适配器 run() 完成后非 None）。
+曾否决的方案：① 各插件指到共享登录态目录（"去它目录搞事"）；② 读回凭据分发给
+SDK 直连（"非 platform 插件都不管认证"）。
+
+**契约**（'/Users/ndsans/.omp/agent/sessions/-Documents-code-astrbot_plugin/2026-08-24T02-51-28-777Z_01a031ae-1a89-74db-8535-b1b5df4e0b98/local/lark-gateway-contract.md）：send_text/send_image/api'(原始透传)/
+fetch_doc/append_doc/download_media/auth_status/auth_login_start/auth_login_finish；
+错误 LarkGatewayError；消费方 None/异常一律降级不崩溃。
+
+**分工状态**：
+- 平台插件 v0.2.0（主代理）：gateway.py + 8 测试，26 passed / ruff 绿。已完成。
+- feishu_qa v0.3.0（FeishuQaGateway 代理）：删自管 lark-cli 全部能力，传输层换网关。
+- bili_verify v0.1.0（BiliVerifyGateway 代理）：feishu_client 换网关 api()，
+  删 lark-oapi 依赖与凭据必填。
+- 待办：全套测试门禁 → 三插件部署实例（平台插件 zip 重打包需含 gateway.py）→ 验证。
+
+注意：feishu_qa 改造后 wiki 文档读取走网关 user 身份 = 共享适配器的用户授权；
+首次需要管理员对 cli_a728800c9f789013 完成一次设备授权（原 feishu_qa 自己的
+授权态不再使用）。
+
+### 网关收口完成（14:10 部署）
+- 实例版本：lark_cli_platform v0.2.0（gateway.py 就绪日志确认）/ feishu_qa v0.3.0 /
+  bili_verify v0.1.0；failed 列表空，consumer pid=348。
+- 本地基线：214 passed / ruff 全绿（kit 45→45+、feishu_qa 107、bili_verify 53、
+  lark_cli_platform 26）。
+- 三仓库已推 GitHub 并打 tag：lark_cli_platform@v0.2.0、feishu_qa@v0.3.0、
+  bili_verify@v0.1.0。
+- 待人工验证：①群聊/私聊收发回归；②feishu_qa /qa_sync 首次运行需管理员对
+  cli_a728800c9f789013 做一次设备授权（旧 feishu_qa 自有授权态已弃用，
+  新链路走网关 = 适配器登录态目录）；③bili_verify 表格写入实测。
+
+### feishu_qa 登录态管理彻底移除（v0.3.1，14:30 部署）
+- 用户定调:qa 里不应有任何登录态管理代码,认证完全由 platform 适配器自管。
+- 删除面:adapter/auth.py(AuthKeeper)、/qa_auth_login、_auth_loop/_send_reauth_card、
+  gateway 客户端 auth_status/auth_login_* 包装、ADMIN_OPEN_ID/AUTH_CHECK_HOURS/
+  AUTH_WARNING_HOURS 配置、tests/test_reauth_card.py、test_adapter 的 auth 用例、
+  test_deployment_layout.py(布局门禁随 kit 依赖一起退役)。
+- 连带:feishu_qa 现为零第三方依赖(requirements 清空,打包脚本不再 vendor kit,
+  build_qa_corpus 去 kit path 注入)。基线 194 passed / ruff 绿。
+- 已部署实例 v0.3.1(failed 空),GitHub tag v0.3.1。
+- 注意:/qa_sync 首次运行仍需 platform 侧完成一次用户设备授权——但入口应在
+  lark_cli 平台适配器实现(qa 不再提供授权命令);平台适配器当前尚无授权命令,
+  属遗留缺口。
+
+### 平台侧通知与认证闭环（v0.3.0，14:44 部署）
+- 配置新增(平台实例扁平键):notify_umos(UMO 列表,取末段 oc_/ou_ 推卡片;
+  已配管理员 p2p)、auth_check_hours(默认 6)、auth_warning_hours(默认 48)。
+- kit v0.2.3:LarkMessenger.send_card(interactive)。gateway 增 send_card。
+- 适配器:begin_reauth(设备授权+红卡带按钮链接)/_auth_loop 周期健康检查
+  (状态恶化自动推卡发起重授权,恢复推绿卡);插件 Star 提供 /lark_auth_login。
+- 事故记录:main.py 曾被编辑损坏(方法体成 "...",platform_adapter 导入丢失)
+  导致 "Platform adapter not found",重写后恢复;consumer pid=829 正常。
+- 基线 200 passed / ruff 绿。kit@v0.2.3、platform@v0.3.0 已推 GitHub tag。
+
+### WebUI 表单 + 白名单归位（v0.3.1，15:06 部署）
+- register_platform_adapter 增 config_metadata(参照 line 适配器格式):WebUI 现在
+  渲染 app_id/app_secret/notify_umos/auth_check_hours/auth_warning_hours 表单项。
+- 按用户定调移除 enabled_chats:白名单由 AstrBot 核心会话设置负责,平台适配器
+  不做过滤(default_config_tmpl/_chat_enabled/相关测试全删)。
+- tests/stubs 的 register_platform_adapter 对齐真实签名(带 config_metadata 等)。
+- 基线 198 passed / ruff 绿;GitHub tag v0.3.1;consumer pid=1113 正常。
+
+### 凭据单一来源语义（kit v0.2.4 / 平台 v0.3.2，15:16 部署）
+- 定调(用户):app_id/app_secret 为平台配置必填项,是凭据唯一权威来源。
+- ensure_bot_credentials 改为同步语义:与目录存量比对,appId/secret 变化即覆盖;
+  一致则不动(用户令牌/TAT 不受影响)。适配器启动时配置缺失记 ERROR(不再有
+  "未配置但沿用存量"的模糊 WARN)。
+- config_metadata 两项标"必填"。基线 198 passed / ruff 绿。双 tag 已推 GitHub。
+
+### user_auth_enabled 开关（平台 v0.3.3，15:28 部署）
+- 新增 bool 配置 user_auth_enabled(默认 true):控制 _auth_loop 周期维护是否启动;
+  关闭后仅 /lark_auth_login 手动授权可用。auth_check_hours/auth_warning_hours
+  仅在开关开启时生效。consumer pid=1425 正常;基线 198 passed / ruff 绿;tag 已推。
+
+### 流式输出修复（平台 v0.3.4，15:38 部署）
+- 现象:命令回复(/sid)正常,但 LLM 生成的回复(普通聊天)不发送——respond.stage
+  走 "Applying streaming output (lark_cli)",而适配器 send() 是整条 CLI 投递。
+- 根因:register_platform_adapter 的 support_streaming_message 默认 True,核心
+  按"支持流式"策略分片下发,适配器无法处理分片。
+- 修复:装饰器显式 support_streaming_message=False,核心缓冲整段后一次性 send。
+- 教训:新平台适配器若 send() 不支持逐字流式,必须在注册时声明 False。
+- consumer pid=1583 正常;tag v0.3.4 已推。
+
+### send_streaming 真修复（平台 v0.3.5，15:48 部署）
+- v0.3.4 的 support_streaming_message=False 不足以改变核心行为:LLM 结果仍是
+  STREAMING_RESULT,respond.stage 直接调 event.send_streaming()——基类实现是
+  空操作(astr_message_event.py:280),回复被静默丢弃。
+- 真修复:LarkCliPlatformEvent 覆写 send_streaming——消费 async_stream、聚合
+  Plain 全文、经正常 send() 整条下发;空聚合跳过。31 passed;tag v0.3.5 已推。
+
+### 重载卡死修复（kit v0.2.5 / 平台 v0.3.6，15:55 部署）
+- 根因:events._terminate 里先 `await proc.stdin.wait_closed()` 再 close()——
+  stdin 为保活一直握着,该 await 永不完成 → 平台 terminate 挂死(即此前多次
+  PATCH enabled 接口超时的真因)。
+- 修复:先 close() 再限时(3s)wait_closed。附回归测试(fake stdin 永挂,
+  断言 _terminate 5s 内返回)。
+- 基线 201 passed / ruff 绿;kit@v0.2.5、platform@v0.3.6 已推 tag。
+
+## 双身份收口与网关通配层（kit v0.2.6 / 平台 v0.4.0，2026-08-24 16:40 部署）
+
+**动因**：lark-cli 每个方法声明 `access_tokens`（实测 231 个 typed 方法：
+42 仅 user、8 仅 bot、181 双身份；另有 im feed/flag 等 user-only shortcut），
+而 CLI `defaultAs=auto` 在双身份并存时把未钉身份的调用静默解析成 user——
+管理员一旦完成设备授权，`gateway.api()` 的全部透传就会悄悄换身份。
+普查数据：tmp/lark_cli_api_survey.json。
+
+**改动**：
+- kit v0.2.6：`apply_identity(args, identity)` + run_lark_cli/run_lark_cli_json
+  新增 identity kwarg（None=不注入）。已推 GitHub tag v0.2.6。
+- 平台 v0.4.0：`api()` 新增 `as_identity="bot"`（默认钉 bot，行为确定性）；
+  新增 **`call(cli_args, *, as_identity="bot", timeout_s, cwd)` 通配层**——任意一次性
+  lark-cli 命令直接透传，不逐能力包装；守卫禁代理 auth/config/profile/update/
+  doctor/event/help/__complete 与自带 --as/--profile。消息面仍固定 bot 不变。
+  已推 GitHub tag v0.4.0 并部署实例（zip 卸载重装通道）。
+
+**部署通道结论**：`POST /plugins/install/upload` 对已存在目录报
+"目录已存在"（即此前"插件操作失败"的真因）；正确姿势 = 先 DELETE
+`/plugins/{id}` 再上传。实例当前无 user 授权态，卸载零损失（bot 凭据由配置自动播种）。
+注意 `POST /plugins/{id}/update`(repo) 会用仓库内容覆盖插件目录——GitHub 上的
+平台仓库不含 vendor/lark-cli 与 vendored kit，走该通道会丢二进制且 kit 回退到
+site-packages v0.2.0(缺 apply_identity 必炸)。zip 通道是唯一安全发版方式，
+除非把 vendor 提交进 GitHub 仓库或先升 site-packages kit。
+
+**验证**：本地 221 passed / ruff 绿；实例 v0.4.0 加载、适配器 16:38:02 重建、
+consumer pid=2387、vendor 二进制就绪、"飞书网关就绪"日志确认。
+NOT VERIFIED：真实群消息收发回归（依赖飞书侧发消息）、user 身份实际调用
+（需管理员先 /lark_auth_login 设备授权——授权后 api()/call() 默认仍 bot，
+需要 user 身份的调用方显式传 as_identity="user"）。
+
+### 登录态自动维护三重修复（平台 v0.4.1，17:26 部署并实测闭环）
+
+用户指出"配置好开启登录态维护后应自动检查并推送到 notify_umos,无需手动授权"。
+排查发现自动维护从未真正可用,三个 bug 叠加:
+1. `auth_login_start` 默认 `--domain feishu` 不是合法 CLI 域(实测 exit 2 unknown
+   domain)→ 授权从未发起成功;该异常还直接杀死 _auth_loop 任务。
+2. `health_of()` 被喂原始 dict(缺 auth_status_from_dict 转换)必然 AttributeError
+   → 即使域合法也会在判定环节静默失败。
+3. `_auth_loop` 先睡满 auth_check_hours 才首查 + 循环体无异常兜底。
+
+**v0.4.1 修复**:授权域可配置(`auth_login_domains`,默认 docs,drive,wiki);
+补类型转换;启动即首查;循环永不因单轮异常退出;持续非健康每约 24h 重发提醒卡。
+**连带发现并修复**:gateway 全部 CLI 调用(api/call/fetch_doc/append_doc/
+download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内无全局 lark-cli,
+即 gateway 自 v0.2.0 起在实例上从未工作过(消息面走 messenger 直连才幸存)。
+现统一 `bin_path=self._binary()`。测试侧:run_loop 套件显式 user_auth_enabled=False,
+消除单测拉真实 CLI 的竞态(曾致全量套件随机挂死)。
+
+**实例闭环实测(17:26)**:重建后首查即检测 user missing → 发起 docs,drive,wiki
+设备授权 → 红卡推送 notify_umos → 用户点链接完成授权(24s)→ 后台轮询成功 →
+"用户重新授权完成"日志 + 绿卡。此后每 6h 自动巡检。GitHub tag v0.4.1 已推。

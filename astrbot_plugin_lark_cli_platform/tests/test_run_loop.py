@@ -13,7 +13,7 @@ from .helpers import FakeMessenger, FakeStream, make_msg
 
 
 def make_adapter(config_overrides=None, queue=None):
-    config = {"lark_cli_home": "", "bootstrap_cli": False, "enabled_chats": []}
+    config = {"lark_cli_home": "", "bootstrap_cli": False, "user_auth_enabled": False}
     config.update(config_overrides or {})
     q = queue if queue is not None else asyncio.Queue()
     return pa.LarkCliPlatform(config, {}, q), q
@@ -46,35 +46,6 @@ async def test_run_commits_events(monkeypatch):
         f"lark_cli:{ev1.message_obj.type.value}:{ev1.session_id}"
         == "lark_cli:GroupMessage:oc_chat"
     )
-
-
-async def test_run_whitelist_filters(monkeypatch):
-    adapter, queue = make_adapter({"enabled_chats": ["lark_cli:GroupMessage:oc_chat"]})
-    install_fakes(
-        monkeypatch,
-        [
-            make_msg(message_id="om_in"),
-            make_msg(message_id="om_out", chat_id="oc_other"),  # 不在白名单
-            make_msg(  # 裸 chat_id 条目命中 p2p
-                message_id="om_p2p",
-                chat_id="ou_dm",
-                chat_type="p2p",
-                text="hi",
-            ),
-        ],
-    )
-    # 白名单只含 group UMO:p2p 也应被挡掉
-    adapter.config["enabled_chats"] = ["lark_cli:GroupMessage:oc_chat"]
-    await adapter.run()
-    assert queue.get_nowait().message_obj.message_id == "om_in"
-    assert queue.empty()
-
-
-async def test_run_whitelist_empty_allows_all(monkeypatch):
-    adapter, queue = make_adapter({"enabled_chats": []})
-    install_fakes(monkeypatch, [make_msg(), make_msg(chat_id="x", message_id="om_x")])
-    await adapter.run()
-    assert queue.qsize() == 2
 
 
 async def test_bootstrap_downloads_when_missing(monkeypatch, tmp_path):
@@ -124,14 +95,15 @@ async def test_state_home_prefers_config(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pa,
         "EventStream",
-        lambda *, binary, state_home=None, **_: captured.update(state_home=state_home) or FakeStream([]),
+        lambda *, binary, state_home=None, **_: captured.update(state_home=state_home)
+        or FakeStream([]),
     )
     monkeypatch.setattr(pa, "LarkMessenger", lambda **kw: FakeMessenger())
     custom = tmp_path / "custom_home"
 
     adapter, _ = make_adapter({"lark_cli_home": str(custom)})
     await adapter.run()
-    assert captured["state_home"] == custom
+    assert Path(captured["state_home"]).resolve() == custom.resolve()
 
     adapter2, _ = make_adapter({"lark_cli_home": ""})
     monkeypatch.setattr(
@@ -144,6 +116,16 @@ async def test_state_home_prefers_config(monkeypatch, tmp_path):
 def test_registration_metadata():
     name, desc, tmpl = pa.LarkCliPlatform._adapter_meta
     assert name == "lark_cli"
-    forbidden = {"app_id", "app_secret", "send_as", "receive_as", "identity", "token"}
+    forbidden = {"send_as", "receive_as", "identity", "token"}  # 身份选择类键仍禁止
     assert not forbidden & set(tmpl)
-    assert set(tmpl) == {"enabled_chats"}  # 二进制/登录态为内部事务,不进用户配置
+    # app_id/app_secret 为 bot 凭据(与 qq_official 存 appid/secret 同一模式);
+    # 二进制与登录态目录仍是内部事务
+    assert set(tmpl) == {
+        "user_auth_enabled",
+        "app_id",
+        "app_secret",
+        "notify_umos",
+        "auth_check_hours",
+        "auth_warning_hours",
+        "auth_login_domains",
+    }
