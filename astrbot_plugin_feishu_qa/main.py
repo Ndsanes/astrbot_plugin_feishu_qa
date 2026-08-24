@@ -40,7 +40,7 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.3.2",
+    "0.3.3",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -208,16 +208,20 @@ class FeishuQaPlugin(Star):
         if router is None:
             yield event.plain_result("语料尚未就绪,请联系管理员执行 /qa_sync")
             return
-        plan = router.route(question, group_id=group_id)
+        plan = router.route(
+            question, group_id=group_id, umo=event.unified_msg_origin
+        )
         if plan.kind == "denied":
             # 管理员可见诊断:便于排查群号/平台形态问题;普通用户保持零响应
             if self._is_admin(event):
                 platform_name = ""
                 with contextlib.suppress(Exception):
                     platform_name = str(event.get_platform_name() or "")
+                umo = str(getattr(event, "unified_msg_origin", "") or "")
                 yield event.plain_result(
                     f"[FeishuQA] 当前会话不在白名单,已忽略。"
-                    f"platform={platform_name} group_id={group_id!r}"
+                    f"platform={platform_name} group_id={group_id!r}\n"
+                    f"如需启用本群,可将 UMO 加入 ENABLED_GROUPS: {umo!r}"
                 )
             event.stop_event()
             return
@@ -241,7 +245,9 @@ class FeishuQaPlugin(Star):
         router = self._router
         if router is None:
             return
-        plan = router.route(text, group_id=event.get_group_id())
+        plan = router.route(
+            text, group_id=event.get_group_id(), umo=event.unified_msg_origin
+        )
         if plan.kind == "direct" and plan.direct:
             await self._send_direct(event, plan.direct)
             event.stop_event()

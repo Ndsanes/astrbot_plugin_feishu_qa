@@ -38,19 +38,29 @@ class AnswerRouter:
     ) -> None:
         self.retriever = retriever
         self.store = store
-        # spec §29:默认空白名单 = 不启用任何群;["*"] 表示全部
+        # spec §29:默认空白名单 = 不启用任何群;["*"] 表示全部。
+        # 条目两种形态(与 bili_verify 白名单约定一致):
+        #   - 裸群 ID(aiocqhttp 数字号 / qq_official group_openid):按 get_group_id 匹配
+        #   - 完整 UMO(实例ID:GroupMessage:群openid):与事件 unified_msg_origin 精确匹配,
+        #     用于多 bot 实例下精确圈定"哪个平台实例的哪个群"
         self.enabled_groups = list(enabled_groups or [])
         self.max_images = max_images
 
-    def group_enabled(self, group_id: str | None) -> bool:
+    def group_enabled(self, group_id: str | None, umo: str | None = None) -> bool:
         if "*" in self.enabled_groups:
             return True
-        if not group_id:
-            return False
-        return group_id in self.enabled_groups
+        for entry in self.enabled_groups:
+            if ":" in entry:
+                if umo and entry == umo:
+                    return True
+            elif group_id and entry == group_id:
+                return True
+        return False
 
-    def route(self, query: str, *, group_id: str | None) -> AnswerPlan:
-        if not self.group_enabled(group_id):
+    def route(
+        self, query: str, *, group_id: str | None, umo: str | None = None
+    ) -> AnswerPlan:
+        if not self.group_enabled(group_id, umo=umo):
             return AnswerPlan(kind="denied")
 
         results: list[SearchResult] = self.retriever.search(query, top_k=1)

@@ -3,11 +3,21 @@
 
 
 class AstrMessageEvent:
-    def __init__(self, message_str="", group_id=None, sender_id="u1", self_id="10000"):
+    def __init__(
+        self,
+        message_str="",
+        group_id=None,
+        sender_id="u1",
+        self_id="10000",
+        umo="",
+    ):
         self.message_str = message_str
         self._group_id = group_id
         self._sender_id = sender_id
         self._self_id = self_id
+        self.unified_msg_origin = umo or (
+            f"stub_inst:GroupMessage:{group_id}" if group_id else ""
+        )
         self.is_wake = False
         self.is_at_or_wake_command = False
         self.stopped = False

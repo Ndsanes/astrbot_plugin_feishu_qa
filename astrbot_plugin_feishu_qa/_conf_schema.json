@@ -9,7 +9,7 @@
   "ENABLED_GROUPS": {
     "description": "启用问答的群聊列表",
     "type": "list",
-    "hint": "填群 ID;留空 = 不在任何群启用;填 * 表示全部群",
+    "hint": "填群 ID 或完整 UMO(实例ID:GroupMessage:群openid);留空 = 不在任何群启用;填 * 表示全部群",
     "default": [],
     "obvious_hint": true
   },
