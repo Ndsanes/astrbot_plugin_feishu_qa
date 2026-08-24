@@ -339,3 +339,7 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   深链列表(官方格式 文档URL#block_id,locator 语料 41/41 齐备);引用规范
   双轨制——FAQ 命中转链接、手册类来源 LLM 正常作答。注意块 ID 随文档
   结构编辑重生成,链接新鲜度=最近一次同步(定时同步会自动跟进)。
+- **qa v0.7.1(markdown 超链接)**:qq_official 平台的链接列表改用
+  `[标题](文档URL#block_id)`——官方适配器默认原生 markdown(msg_type=2)
+  投递可点击;其他平台维持标题行+裸链接。桩补 get_platform_name。
+  根套件基线 245→246。

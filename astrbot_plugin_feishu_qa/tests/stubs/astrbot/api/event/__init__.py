@@ -32,6 +32,9 @@ class AstrMessageEvent:
     def get_self_id(self):
         return self._self_id
 
+    def get_platform_name(self):
+        return getattr(self, "_platform_name", "")
+
     def stop_event(self):
         self.stopped = True
 

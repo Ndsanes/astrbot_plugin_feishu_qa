@@ -288,20 +288,39 @@ class TestQaSendAnswer:
         assert isinstance(out[0], str) and "没有可投递" in out[0]
         assert event.sent == [], "校验失败不得发送任何消息"
 
-    def test_single_entry_emits_block_anchor_link(
-        self, plugin: FeishuQaPlugin
+    def test_qq_official_emits_markdown_hyperlink(
+        self, plugin: FeishuQaPlugin, monkeypatch
     ) -> None:
         entry = next(e for e in plugin._entries if e.source_locator)
         event = AstrMessageEvent()
+        monkeypatch.setattr(
+            event, "get_platform_name", lambda: "qq_official", raising=False
+        )
         out = run_handler(plugin.qa_send_answer(event, entry_ids=entry.id))
         assert isinstance(out[0], str) and "直达链接" in out[0] and "勿复述" in out[0]
         assert len(event.sent) == 1
-        node = event.sent[0].chain[0]
-        texts = [c.text for c in node.content if c.type == "Plain"]
+        texts = [c[1] for c in event.sent[0].chain if c[0] == "plain"]
         joined = "\n".join(texts)
-        # 锚点格式(官方):文档URL#block_id
-        assert f"https://my.feishu.cn/wiki/test#{entry.source_locator}" in joined
-        assert entry.raw_title in joined and "📖 命中 1 条" in joined
+        # 官方网关默认原生 markdown(msg_type=2):[标题](锚点URL) 可点击
+        expected = (
+            f"1. [{entry.raw_title}]"
+            f"(https://my.feishu.cn/wiki/test#{entry.source_locator})"
+        )
+        assert expected in joined, joined
+        assert "📖 命中 1 条" in joined
+
+    def test_generic_platform_falls_back_to_bare_url(
+        self, plugin: FeishuQaPlugin
+    ) -> None:
+        entry = next(e for e in plugin._entries if e.source_locator)
+        event = AstrMessageEvent()  # 桩无平台名 → 非 qq_official 分支
+        run_handler(plugin.qa_send_answer(event, entry_ids=entry.id))
+        all_text = "".join(
+            c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
+        )
+        assert f"【{entry.raw_title}】" in all_text
+        assert f"👉 https://my.feishu.cn/wiki/test#{entry.source_locator}" in all_text
+        assert "](" not in all_text, "非官方平台不得输出 markdown 字面量"
 
     def test_multi_entry_merged_into_single_send(self, plugin) -> None:
         picks = [e for e in plugin._entries if e.source_locator][:2]

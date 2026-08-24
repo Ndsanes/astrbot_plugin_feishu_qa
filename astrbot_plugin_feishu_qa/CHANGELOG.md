@@ -1,5 +1,14 @@
 # 更新日志
 
+## v0.7.1 (2026-08-25)
+
+### 变更
+
+- qq_official 平台的直达链接改用 markdown 超链接形态
+  `[标题](文档URL#block_id)`:官方网关默认以原生 markdown(msg_type=2)
+  投递,标题可点击。其他平台维持"标题行 + 裸链接"避免字面量输出。
+- 测试桩 AstrMessageEvent 补 get_platform_name。
+
 ## v0.7.0 (2026-08-25)
 
 ### 变更

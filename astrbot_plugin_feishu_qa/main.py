@@ -58,7 +58,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.7.0",
+    "0.7.1",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -394,10 +394,20 @@ class FeishuQaPlugin(Star):
             bad = ",".join(skipped) if skipped else "未提供有效条目"
             return f"发送失败:没有可投递的条目({bad})"
 
-        lines = [f"📖 命中 {len(entries)} 条官方整理的解答(点链接直达文档对应章节):"]
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+
+        lines = [f"📖 命中 {len(entries)} 条官方整理的解答(点标题直达文档对应章节):"]
         for i, entry in enumerate(entries, 1):
-            lines.append(f"\n{i}、【{entry.raw_title}】")
-            lines.append(f"👉 {self._wiki_block_url(entry)}")
+            url = self._wiki_block_url(entry)
+            if platform_name == "qq_official":
+                # 官方网关默认以原生 markdown(msg_type=2)投递,超链接可点击
+                safe_title = entry.raw_title.replace("[", "［").replace("]", "］")
+                lines.append(f"\n{i}. [{safe_title}]({url})")
+            else:
+                lines.append(f"\n{i}、【{entry.raw_title}】")
+                lines.append(f"👉 {url}")
         lines.append("\n📄 来源:《有福同享全家桶Q&A汇总》(肖闻 Xiaowenn 整理)")
         direct = DirectAnswer(
             text="\n".join(lines), image_paths=[], entry_id=entries[0].id
