@@ -297,3 +297,7 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   app_token 暴露无实际改动风险,不轮换;git 历史中的 plan.md 不再追讨。
 - dist/ 产物清理:两插件共删 9 个旧版/vendor zip(约 175MB),各保留当前版
   (qa v0.3.2 / platform v0.4.2,后者兼任未来打包的 lark-cli 二进制供体)。
+- **bili v0.1.2(用户指出弃用项遗留)**:移除"已弃用"配置键 FEISHU_APP_ID/
+  FEISHU_APP_SECRET 全链路残留(schema 两块/FeishuCfg 字段/from_dict/get/as_dict
+  条目/README 措辞),CHANGELOG 记录;qa 10 键全活、platform 无插件 schema 已核。
+  实例经 GitHub update 通道升到 v0.1.2,重载无错。
