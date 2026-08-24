@@ -293,3 +293,7 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   fetch_doc/append_doc 改走 as_identity="user" 统一身份通道;send_streaming 补
   super() 记账(核对真实基类只记账不消费生成器);测试构造参数清 bootstrap_cli。
 - AGENTS.md 全面同步到网关时代(概述/架构图/目录/导入约定/基线数字)。
+- **plan.md 凭据风险已评估关闭(用户确认)**:该多维表格权限只对 BOT 身份开放,
+  app_token 暴露无实际改动风险,不轮换;git 历史中的 plan.md 不再追讨。
+- dist/ 产物清理:两插件共删 9 个旧版/vendor zip(约 175MB),各保留当前版
+  (qa v0.3.2 / platform v0.4.2,后者兼任未来打包的 lark-cli 二进制供体)。
