@@ -134,6 +134,7 @@ class EventStream:
         event_key: str = _EVENT_KEY,
         max_backoff_s: float = _BACKOFF_MAX_S,
         max_restarts: int | None = None,
+        log_cb: Callable[[str], None] | None = None,
     ) -> None:
         import os
 
@@ -147,6 +148,7 @@ class EventStream:
         self._event_key = event_key
         self._max_backoff = max_backoff_s
         self._max_restarts = max_restarts
+        self._log = log_cb or (lambda _msg: None)
         self._dedup = _Deduper()
         self._proc: asyncio.subprocess.Process | None = None
 
@@ -199,6 +201,7 @@ class EventStream:
                         f"无法启动 lark-cli event consume: {exc}"
                     ) from exc
                 assert self._proc is not None and self._proc.stdout is not None
+                self._log(f"consumer pid={self._proc.pid}")
                 ran_ok = False
                 try:
                     async for raw_line in self._proc.stdout:

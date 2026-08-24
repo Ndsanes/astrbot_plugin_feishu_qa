@@ -86,7 +86,8 @@ class LarkCliPlatform(Platform):
         logger.info("[lark_cli] 启动(3/4):二进制就绪 %s", binary)
 
         self._messenger = LarkMessenger(binary=binary)
-        self._stream = EventStream(binary=binary, state_home=state_home)
+        self._stream = EventStream(binary=binary, state_home=state_home,
+                                   log_cb=lambda m: logger.info(f"[lark_cli][stream] {m}"))
         logger.info("[lark_cli] 启动(4/4):事件消费进程拉起中...")
         async for msg in self._stream.stream():
             if not self._chat_enabled(msg.chat_id, msg.chat_type):

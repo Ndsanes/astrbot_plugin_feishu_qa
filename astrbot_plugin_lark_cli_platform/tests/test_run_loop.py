@@ -90,7 +90,7 @@ async def test_bootstrap_downloads_when_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(pa, "ensure_bundled_cli", fake_ensure)
     monkeypatch.setattr(pa, "resolve_cli_bin", lambda env=None: Path("/path/cli"))
     monkeypatch.setattr(pa.StarTools, "get_data_dir", classmethod(lambda cls, n=None: tmp_path))
-    monkeypatch.setattr(pa, "EventStream", lambda **kw: FakeStream([make_msg()]))
+    monkeypatch.setattr(pa, "EventStream", lambda **kw: FakeStream([make_msg()]))  # log_cb 在 kw 中
     messenger = FakeMessenger()
     monkeypatch.setattr(pa, "LarkMessenger", lambda **kw: messenger)
 
@@ -124,7 +124,7 @@ async def test_state_home_prefers_config(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pa,
         "EventStream",
-        lambda *, binary, state_home=None: captured.update(state_home=state_home) or FakeStream([]),
+        lambda *, binary, state_home=None, **_: captured.update(state_home=state_home) or FakeStream([]),
     )
     monkeypatch.setattr(pa, "LarkMessenger", lambda **kw: FakeMessenger())
     custom = tmp_path / "custom_home"
