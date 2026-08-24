@@ -22,9 +22,8 @@
 ## 安装
 
 1. 将本目录放入 AstrBot `data/plugins/`
-2. 安装共享依赖:`pip install -e ../astrbot_lark_kit`(或等发布后从 git 安装)
-3. 部署并启用 `lark_cli` 平台适配器(astrbot_plugin_lark_cli_platform),完成登录
-4. WebUI 配置:`WIKI_URL` + `ENABLED_GROUPS`(留空不启用任何群)
+2. 部署并启用 `lark_cli` 平台适配器(astrbot_plugin_lark_cli_platform),完成登录
+3. WebUI 配置:`WIKI_URL` + `ENABLED_GROUPS`(留空不启用任何群)
 
 ## 使用
 

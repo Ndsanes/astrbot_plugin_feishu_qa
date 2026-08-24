@@ -92,6 +92,3 @@ def parse_envelope(raw: str) -> LarkEnvelope:
     )
 
 
-def parse_envelope_bytes(raw: bytes) -> LarkEnvelope:
-    return parse_envelope(raw.decode("utf-8", errors="replace"))
-

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from ..corpus.model import QaEntry
 from ..retrieval.scorer import Confidence, Retriever, SearchResult
@@ -23,7 +22,6 @@ class AnswerPlan:
 
     kind: str
     direct: DirectAnswer | None = None
-    miss_text: str = ""
     score: float = 0.0
 
 
@@ -37,14 +35,12 @@ class AnswerRouter:
         store: SnapshotStore | None = None,
         enabled_groups: list[str] | None = None,
         max_images: int = 3,
-        source_root: Path | None = None,
     ) -> None:
         self.retriever = retriever
         self.store = store
         # spec §29:默认空白名单 = 不启用任何群;["*"] 表示全部
         self.enabled_groups = list(enabled_groups or [])
         self.max_images = max_images
-        self.source_root = Path(source_root) if source_root else None
 
     def group_enabled(self, group_id: str | None) -> bool:
         if "*" in self.enabled_groups:

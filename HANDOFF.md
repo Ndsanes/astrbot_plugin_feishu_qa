@@ -265,3 +265,31 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
 **实例闭环实测(17:26)**:重建后首查即检测 user missing → 发起 docs,drive,wiki
 设备授权 → 红卡推送 notify_umos → 用户点链接完成授权(24s)→ 后台轮询成功 →
 "用户重新授权完成"日志 + 绿卡。此后每 6h 自动巡检。GitHub tag v0.4.1 已推。
+
+## 全工作区代码清理轮（2026-08-24 晚,kit v0.2.7 / qa v0.3.2 / platform v0.4.2 / bili v0.1.1）
+
+四包并行审计(4 reviewer agent)+四包并行清理(4 task agent)。基线变化:根套件
+225→223(kit 删 test_dedup_repro、qa 删 test_miss_reply_text 各 1),bili 53→49
+(删 4 个 admit_message 专属测试)。全套 223+49 全绿,ruff 干净。
+
+- **kit**:修 P1(__init__ __all__ 声明 PlatformIdentity/resolve_platform_instance
+  却无 import,包根导入即 ImportError;补 import);删 parse_envelope_bytes、
+  tests/test_dedup_repro.py(一次性调试脚本)、重复 _drain 定义;.tmp_home/ 残留
+  目录删除并入 gitignore。platforms.py 整模块仍零生产消费方但保留(已修复导出)。
+- **feishu_qa**:删幽灵配置键 ENABLE_LLM_TOOL(schema 声明但从不读取)、send_text
+  空桩、format_miss_reply(与 main 内联文案双真相,保留内联版)、miss_text 死字段、
+  source_root 死参数、SnapshotStore.exists()、过期 fixture qa_r8268.json/md;
+  VERIFICATION_REPORT.md 标注历史快照;README 删 kit 安装步骤。
+- **bili_verify**(用户确认:表格对 bot 身份开通权限,gateway.api bot 链路一行未动):
+  platform_port.py 748→38 行(仅留 JoinRequest DTO);删 _platform_port 占位、
+  admit_message/mark_left/find/from_plugin_config、storage 三个零调用写函数、
+  失效 _uid_pattern 正则、suppress-pass 空操作与三分支同路逻辑合并;
+  FEISHU_QQ_FIELD 幽灵键清除;PENDING_CHECK_INTERVAL 双轨默认统一 3800
+  (唯一有意行为修正);plan.md 整删(公开 repo 含暴露的 FEISHU_APP_TOKEN,
+  git 历史仍在,**该 token 建议轮换/收紧表权限**)。
+- **platform**:README/requirements 清 bootstrap_cli 残留 + if True: 脚手架展平;
+  create_task 强引用 self._reauth_task 防 GC + begin_reauth 失败原因落日志 +
+  在途防重入;api() 委托 call()(守卫语义等价,test_gateway api 用例零修改通过);
+  fetch_doc/append_doc 改走 as_identity="user" 统一身份通道;send_streaming 补
+  super() 记账(核对真实基类只记账不消费生成器);测试构造参数清 bootstrap_cli。
+- AGENTS.md 全面同步到网关时代(概述/架构图/目录/导入约定/基线数字)。

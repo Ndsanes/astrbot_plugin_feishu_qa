@@ -77,7 +77,7 @@ async def test_deliver_chain_swallows_cli_failure(caplog):
 
 def _adapter_with_messenger(messenger):
     adapter = LarkCliPlatform(
-        {"lark_cli_home": "", "bootstrap_cli": False}, {}, event_queue=None
+        {"lark_cli_home": ""}, {}, event_queue=None
     )
     adapter._messenger = messenger
     return adapter

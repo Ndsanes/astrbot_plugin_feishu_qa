@@ -13,7 +13,7 @@ from .helpers import FakeMessenger, FakeStream, make_msg
 
 
 def make_adapter(config_overrides=None, queue=None):
-    config = {"lark_cli_home": "", "bootstrap_cli": False, "user_auth_enabled": False}
+    config = {"lark_cli_home": "", "user_auth_enabled": False}
     config.update(config_overrides or {})
     q = queue if queue is not None else asyncio.Queue()
     return pa.LarkCliPlatform(config, {}, q), q
@@ -49,7 +49,7 @@ async def test_run_commits_events(monkeypatch):
 
 
 async def test_bootstrap_downloads_when_missing(monkeypatch, tmp_path):
-    """vendored 缺失 + bootstrap_cli=true → ensure_bundled_cli 被调用并采用结果。"""
+    """vendored 缺失 → 无条件自举:ensure_bundled_cli 被调用并采用结果。"""
     calls = []
 
     def fake_ensure(vendor_dir, *, platforms=None):
@@ -65,7 +65,7 @@ async def test_bootstrap_downloads_when_missing(monkeypatch, tmp_path):
     messenger = FakeMessenger()
     monkeypatch.setattr(pa, "LarkMessenger", lambda **kw: messenger)
 
-    adapter, queue = make_adapter({"bootstrap_cli": True})
+    adapter, queue = make_adapter()
     await adapter.run()
     assert calls == [tmp_path / "vendor"]
     assert isinstance(adapter._messenger, FakeMessenger)
@@ -84,7 +84,7 @@ async def test_missing_binary_is_graceful(monkeypatch, tmp_path):
     monkeypatch.setattr(pa, "resolve_cli_bin", raise_not_found)
     monkeypatch.setattr(pa.StarTools, "get_data_dir", classmethod(lambda cls, n=None: tmp_path))
 
-    adapter, queue = make_adapter({"bootstrap_cli": True})
+    adapter, queue = make_adapter()
     await adapter.run()  # 不应抛异常
     assert queue.empty()
 

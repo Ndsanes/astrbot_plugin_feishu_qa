@@ -85,7 +85,7 @@ async def test_fetch_doc返回content且缺content报错(monkeypatch):
     )
     assert await g.fetch_doc("https://my.feishu.cn/wiki/x") == "# 正文"
     args = calls[0]["args"]
-    assert args[:3] == ["docs", "+fetch", "--as"]
+    assert args[:2] == ["docs", "+fetch"] and args[-2:] == ["--as", "user"]
 
     bad = make_gateway(
         monkeypatch, lambda c: SimpleNamespace(ok=True, document={}, data={})

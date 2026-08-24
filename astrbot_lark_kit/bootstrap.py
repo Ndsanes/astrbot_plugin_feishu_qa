@@ -30,7 +30,7 @@ __all__ = [
     "ensure_bundled_cli",
 ]
 
-# 与 tools/package_astrbot_zip.sh 打包产物保持一致:只有这两个平台有真实构建物
+# 与 astrbot_plugin_feishu_qa/tools/package_astrbot_zip.sh 打包产物保持一致(仅这两平台有构建物)
 DEFAULT_CLI_VERSION = "1.0.85"
 SUPPORTED_PLATFORMS = ("linux-amd64", "linux-arm64")
 _RELEASE_BASE = "https://github.com/larksuite/cli/releases/download/v{version}"

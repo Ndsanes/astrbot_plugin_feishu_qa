@@ -9,7 +9,6 @@ import pytest
 from astrbot_plugin_feishu_qa.answer.direct import (
     SOURCE_ATTRIBUTION,
     format_direct_answer,
-    format_miss_reply,
 )
 from astrbot_plugin_feishu_qa.answer.router import AnswerRouter
 from astrbot_plugin_feishu_qa.corpus.parser import parse_xml
@@ -96,10 +95,6 @@ class TestMiss:
         router = AnswerRouter(env["retriever"], store=env["store"], enabled_groups=["*"])
         plan = router.route("今天上海天气怎么样", group_id="1")
         assert plan.kind == "miss"
-
-    def test_miss_reply_text(self) -> None:
-        text = format_miss_reply()
-        assert "没有" in text and "/问" in text
 
 
 class TestMetricsContract:

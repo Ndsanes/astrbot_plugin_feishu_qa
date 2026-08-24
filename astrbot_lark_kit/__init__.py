@@ -30,10 +30,11 @@ from .errors import (
 )
 from .events import EventStream, NormalizedLarkMessage, normalize_event
 from .messaging import LarkMessenger
+from .platforms import PlatformIdentity, resolve_platform_instance
 from .rate_limit import RateLimiter
 from .state import ensure_bot_credentials, ensure_short_home, resolve_state_home
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 
 __all__ = [
     "DEFAULT_CLI_VERSION",

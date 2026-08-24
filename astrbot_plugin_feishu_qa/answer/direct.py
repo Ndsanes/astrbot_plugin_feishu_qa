@@ -50,10 +50,3 @@ def format_direct_answer(
         entry_id=entry.id,
     )
 
-
-def format_miss_reply() -> str:
-    """LOW 置信的兜底话术(不编造结论,spec §21/§26)。"""
-    return (
-        "没有在 Q&A 文档里找到足够相关的问题。\n"
-        "可以换个说法试试,或用 /问 <关键词> 描述具体报错信息。"
-    )

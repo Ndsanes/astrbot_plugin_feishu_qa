@@ -13,6 +13,7 @@ output/cakewalk/
 AstrBot/
 astrbot_plugin_bili_verify_feishu/
 tmp/
+.tmp_home/
 
 # 管理员 JWT 本地缓存
 .astrbot_jwt_cache

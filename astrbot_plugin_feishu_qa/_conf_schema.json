@@ -46,11 +46,6 @@
     "type": "float",
     "default": 3.0
   },
-  "ENABLE_LLM_TOOL": {
-    "description": "注册 search_feishu_qa 工具给主 Agent",
-    "type": "bool",
-    "default": true
-  },
   "LEARN_CONTEXT_MESSAGES": {
     "description": "/learn 分析的最近消息条数上限",
     "type": "int",

@@ -1,5 +1,13 @@
 # 更新日志
 
+## v0.3.2 (2026-08-24)
+
+### 变更
+
+- 内部清理:移除幽灵配置键 `ENABLE_LLM_TOOL`、死代码(`format_miss_reply`、
+  `AnswerPlan.miss_text`、`AnswerRouter.source_root`、`SnapshotStore.exists`、
+  网关 `send_text` 死桩)与过时测试资产;无行为变更。
+
 ## v0.3.0 (2026-08-24)
 
 ### 变更

@@ -114,7 +114,3 @@ class GatewayClient:
                 return saved
         return output_path if output_path.is_file() else saved
 
-    # ── 发送 ──
-
-    async def send_text(self, target: str, text: str) -> bool:
-        """以 bot 身份向 oc_/ou_ 会话发送文本;成功 True。"""

@@ -13,7 +13,6 @@ def make_adapter(config=None) -> LarkCliPlatform:
     return LarkCliPlatform(
         {
             "lark_cli_home": "",
-            "bootstrap_cli": False,
             "notify_umos": [],
             **(config or {}),
         },

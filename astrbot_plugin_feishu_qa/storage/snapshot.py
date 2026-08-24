@@ -39,9 +39,6 @@ class SnapshotStore:
             logger.error("[snapshot] 读取失败(视为无快照): %s", exc)
             return None
 
-    def exists(self) -> bool:
-        return self.snapshot_path.is_file()
-
     # ── 写(staging → atomic swap)──
 
     def commit(

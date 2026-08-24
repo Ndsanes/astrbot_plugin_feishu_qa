@@ -11,7 +11,7 @@ from .helpers import make_msg
 
 def make_adapter() -> LarkCliPlatform:
     return LarkCliPlatform(
-        {"lark_cli_home": "", "bootstrap_cli": False},
+        {"lark_cli_home": ""},
         {},
         event_queue=None,
     )

@@ -117,10 +117,6 @@ async def test_stream_产出归一化消息并过滤bot自消息(tmp_path):
     assert [m.message_id for m in got] == ["om_1", "om_2"]
 
 
-async def _drain(agen):
-    async for _ in agen:
-        pass
-
 
 @pytest.mark.asyncio
 async def test_stream_cancel终止子进程无孤儿(tmp_path):
