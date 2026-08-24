@@ -301,3 +301,7 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   FEISHU_APP_SECRET 全链路残留(schema 两块/FeishuCfg 字段/from_dict/get/as_dict
   条目/README 措辞),CHANGELOG 记录;qa 10 键全活、platform 无插件 schema 已核。
   实例经 GitHub update 通道升到 v0.1.2,重载无错。
+- **qa v0.3.3(用户指出 ENABLED_GROUPS 非 UMO 格式)**:白名单双形态——裸群 ID
+  (原行为不变)+ 完整 UMO(按事件 unified_msg_origin 精确匹配);管理员拒绝诊断
+  现附当前会话 UMO 供直接复制。测试桩统一补 unified_msg_origin 属性(修 platform
+  桩先载 sys.modules 污染 qa 用例的形状漂移),根套件基线 223→226。已部署实例。
