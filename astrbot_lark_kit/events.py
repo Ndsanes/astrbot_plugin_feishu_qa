@@ -225,6 +225,15 @@ class EventStream:
                     # 无论 EOF/异常/生成器关闭,都先回收当前子进程
                     code = self._proc.returncode
                     await self._terminate()
+                    if code not in (None, 0):
+                        self._log(f"consumer 非零退出 code={code}")
+                    if self._log:
+                        err_tail = b""
+                        if self._proc is not None and self._proc.stderr is not None:
+                            try:
+                                err_tail = self._proc.stderr._transport.get_pipe_transport() and b"" or b""
+                            except Exception:
+                                err_tail = b""
                 # 停止路径:GeneratorExit 已向上传播,不会到达这里;
                 # 到达此处说明是 EOF/非零退出 → 判断是否重启
                 if self._max_restarts is not None and restarts >= self._max_restarts:
