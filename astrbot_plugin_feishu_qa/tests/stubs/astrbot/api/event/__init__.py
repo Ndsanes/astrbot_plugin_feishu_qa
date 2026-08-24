@@ -62,6 +62,11 @@ class MessageChain:
         return self
 
 
+class MessageEventResult(MessageChain):
+    """真实 API 中继承 MessageChain 的结果载体(工具直发契约用)。"""
+
+
+
 class filter:
     @staticmethod
     def command(*a, **k):

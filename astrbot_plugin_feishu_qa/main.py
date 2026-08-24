@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -40,7 +41,7 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.3.3",
+    "0.4.0",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -261,8 +262,7 @@ class FeishuQaPlugin(Star):
             query (str): 用户的实际问题或关键词
         """
         if self._retriever is None:
-            yield event.plain_result("search_feishu_qa: 语料未就绪")
-            return
+            return "search_feishu_qa: 语料未就绪"
         results = self._retriever.search(query, top_k=3)
         if not results or results[0].confidence == "LOW":
             payload = {"matches": [], "note": "没有找到足够相关的 QA"}
@@ -282,7 +282,59 @@ class FeishuQaPlugin(Star):
                 ],
                 "note": "只允许依据以上原文回答;不足时明确告知用户资料中没有。",
             }
-        yield event.plain_result(json.dumps(payload, ensure_ascii=False))
+        return json.dumps(payload, ensure_ascii=False)
+
+    @filter.llm_tool(name="qa_entry_images")
+    async def qa_entry_images(self, event: AstrMessageEvent, entry_id: str):
+        """把指定 QA 条目的操作截图直接发送给用户。仅当检索结果带截图标记且
+        用户需要查看截图时调用;发送成功后不要向用户复述发送过程。
+
+        Args:
+            entry_id (str): QA 条目 ID,形如 qa_xxxxxxxxxxxxxxxx,只能取自检索结果中的截图标记
+        """
+        import astrbot.api.message_components as Comp
+        from astrbot.api.event import MessageEventResult
+
+        if not re.fullmatch(r"qa_[0-9a-f]{16}", entry_id or ""):
+            return "图片资源不存在:entry_id 格式非法"
+        entry = next((e for e in self._entries if e.id == entry_id), None)
+        if entry is None:
+            return f"图片资源不存在:{entry_id} 不在当前语料中"
+        if not entry.images:
+            return "该条目没有配图"
+        paths: list[str] = []
+        for img in entry.images:
+            path = self.store.image_path(
+                img.local_path or f"images/{img.image_id}.png"
+            )
+            if path.is_file() and path.stat().st_size > 0:
+                paths.append(str(path))
+        paths = list(dict.fromkeys(paths))  # 去重保序(同图被条目重复引用时)
+        if not paths:
+            return "图片资源不存在:本地图片文件缺失"
+
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        caption = f"【配图】{entry.raw_title}"
+        result = None
+        if self._supports_merged_forward(platform_name):
+            try:
+                uin = int(event.get_self_id() or 10000)
+                content: list = [Comp.Plain(caption)]
+                content.extend(Comp.Image.fromFileSystem(p) for p in paths)
+                node = Comp.Node(uin=uin, name="Q&A 助手", content=content)
+                result = MessageEventResult(chain=[node])
+            except Exception as exc:
+                logger.warning("[FeishuQA] 配图合并转发构建失败,回退普通消息: %s", exc)
+                result = None
+        if result is None:
+            result = MessageEventResult().message(caption)
+            for p in paths:
+                result.file_image(p)
+        # 返回 MessageEventResult:核心按 tool_direct_result 直发给用户并结束本轮
+        # Agent;返回 str 则作为工具结果回传 LLM 继续。两条路径互斥,见执行器契约。
+        return result
 
     # ── 管理指令 ──
 

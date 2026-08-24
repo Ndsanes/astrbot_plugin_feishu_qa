@@ -1,5 +1,21 @@
 # 更新日志
 
+## v0.4.0 (2026-08-24)
+
+### 新增
+
+- `qa_entry_images` LLM 工具:Agent 命中带图 QA 条目后按 entry_id 从本地
+  已同步图片直发截图(合并转发优先、普通多图回退),零网络零飞书调用。
+  有效条目返回消息链走核心 `tool_direct_result` 直发通道;无效条目返回
+  错误文本回传 LLM 继续对话。
+
+### 修复
+
+- `search_feishu_qa` 返回值契约:由 `yield event.plain_result(...)` 改为
+  返回 JSON 字符串。当前核心执行器语义下,工具产出 MessageEventResult 会
+  被直接发送给用户并终止 Agent 循环(原始 JSON 直发且无回答);旧写法因
+  线上从未被调用过而未暴露。
+
 ## v0.3.3 (2026-08-24)
 
 ### 变更
