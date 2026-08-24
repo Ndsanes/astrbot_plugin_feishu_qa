@@ -1,0 +1,1438 @@
+{
+ "schema_version": 1,
+ "revision_id": 8268,
+ "document_id": "HzxwdOdKloIhNdx7nQTcVJXfnBe",
+ "built_at": "2026-08-23T08:21:22.399077+00:00",
+ "entry_count": 41,
+ "image_count": 108,
+ "content_hash": "1c00a68dbd7d83090d344a15f9ae08e9d0ac5c1ef09cecedf6036e1ac2f1673b",
+ "preamble": "",
+ "diagnostics": [
+  "条目 qa_23774db0d24d4454 无正文且无图片(raw_title='2、【MIDI键盘接上没声音】如何连接其他品牌的MIDI键盘')"
+ ],
+ "entries": [
+  {
+   "id": "qa_cf9823b16ecb05f4",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（一）缺少内容相关："
+   ],
+   "category": "（一）缺少内容相关：",
+   "symptom_tags": [
+    "没有自带模板"
+   ],
+   "title": "1、Cakewalk没有自带的模板怎么办？",
+   "raw_title": "1、【没有自带模板】Cakewalk没有自带的模板怎么办？",
+   "body": "A：一般来说我们会自己去创建模板，任何宿主的自带模板都无法符合我们个人的工作习惯。\n但是我们可能需要一个空白模板（Cakewalk自带的Empty Project模板），这样可以更快的打开。\n那么我们一步一步操作，\n（1）首先我们打开Cakewalk，按快捷键P，打开参数设置，看到文件——文件夹位置\n（2）查看第二行的“模板”的路径是不是C:\\Cakewalk Content\\Sonar\\Project Templates\n（一般出现这个问题的都是这个路径会变到另一个奇怪的位置,比如C:\\User\\你的用户名\\AppData\\Roaming\\Cakewalk\\Sonar）\n（3）如果位置不对的话，就改为C:\\Cakewalk Content\\Sonar\\Project Templates 然后点击应用，再把Sonar关了，重新打开，就可以在起始页面里看到Empty Project这个模板了。",
+   "images": [
+    {
+     "image_id": "img_W5Qib1Wriog9wGx9c52c",
+     "file_token": "W5Qib1Wriog9wGx9c52cqC9tnHh",
+     "name": "截屏2026-03-14 15.22.06.png",
+     "local_path": "images/img_W5Qib1Wriog9wGx9c52c.png"
+    },
+    {
+     "image_id": "img_R5ZxbkEZ0o8ZjixMYsRc",
+     "file_token": "R5ZxbkEZ0o8ZjixMYsRcc1yRnOb",
+     "name": "0a18a960197ea990552aa20b8ffe2da1.jpg",
+     "local_path": "images/img_R5ZxbkEZ0o8ZjixMYsRc.jpg"
+    }
+   ],
+   "source_locator": "LRxKduJ9Io4SeVxSxnycqLJFnjh",
+   "source_revision": 8268,
+   "content_hash": "123f84398fc0a1ec8dc77e3baafdc76a913019b05139d6cbddebe8bd08f7c633"
+  },
+  {
+   "id": "qa_8a1971cf915bc4b4",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（一）缺少内容相关："
+   ],
+   "category": "（一）缺少内容相关：",
+   "symptom_tags": [
+    "搜索不到自带音源"
+   ],
+   "title": "2、Cakewalk自带的Studio Instruments下载后，在宿主中搜索不到，显示只有一个Xsampler怎么办？",
+   "raw_title": "2、【搜索不到自带音源】Cakewalk自带的Studio Instruments下载后，在宿主中搜索不到，显示只有一个Xsampler怎么办？",
+   "body": "A：\n（1）首先查看Cakewalk设置（快捷键P）中的VST设置的“VST扫描路径”，看看有没有C:\\Program Files\\Cakewalk\\VstPlugins\n（2）如果没有的话，而且有若干个像下图的第二个路径这种你自己添加的错误路径的话，就再手动添加一个 C:\\Program Files\\Cakewalk\\VstPlugins  ，添加之后点击右下角应用，再点击扫描看看能不能扫出来。\n（3）如果扫不出来的话，我们就打开Cakewalk Sonar的安装包，一步一步慢慢点，看下以下图片这个路径是不是和我一样。如果不一样而且不能更改（显示比如“D:\\ ”这种根目录），那说明你没有严格按照我的视频操作。\n（4）然后我们打开C:\\Program Files\\Cakewalk\\   这个路径，看看这个路径下有没有“VstPlugin”这个文件夹，如果没有的话，我们就找到问题根源所在了，安装的时候你不听话，乱改路径了。\n（5）那接下来我们开始修复，首先用Windows设置（右键底部的Windows 图标）中的“安装的应用”删除Cakewalk Sonar（不要手动直接删文件夹）\n（6）删好后，回到桌面上使用快捷键Windows+R，打开“运行”，输入Regedit，点击“确定”\n（7）进去后我们把左侧目录滑到最上方，选择“计算机”，按下快捷键Ctrl+F，打开“查找”，输入Cakewalk，点击“查找下一个”。搜索出来后我们选中搜索出来的文件使用delete删除或者右键删除，如果提示“可能损坏系统文件”，我们无视，继续删除。（注意别删错，这里我们只删和Cakewalk以及Sonar有关的文件）删掉一个后，我们使用快捷键F3搜索下一个（有些电脑键盘需要按下Fn+F3或者Fn+3，具体看你的电脑键盘是怎么样的），然后删除下一个，再F3，删除，F3删除，直到没有可删的Cakewalk相关的东西为止。\n（8）现在我们重新安装Cakewalk Sonar，这次一定不能更改任何路径！一定不能更改任何路径！一定不能更改任何路径！确保这步的路径是图片中的这样子。然后下一步下一步安装完成即可。然后再安装一遍Cakewalk 自带的Sotudio instruments。\n（9）安装好后，打开Cakewalk Sonar，进行插件扫描，就可以扫到这些自带的音源了。",
+   "images": [
+    {
+     "image_id": "img_EHuSb5dtwo7JKMx2wOrc",
+     "file_token": "EHuSb5dtwo7JKMx2wOrc2hVJn7d",
+     "name": "截屏2026-03-06 17.57.20.png",
+     "local_path": "images/img_EHuSb5dtwo7JKMx2wOrc.png"
+    },
+    {
+     "image_id": "img_I1Zyb0mtXoP5QJxdnyfc",
+     "file_token": "I1Zyb0mtXoP5QJxdnyfc3bDRnQZ",
+     "name": "6f479b6f5f61a4b6d7f30b15fae5c0b1.jpg",
+     "local_path": "images/img_I1Zyb0mtXoP5QJxdnyfc.jpg"
+    },
+    {
+     "image_id": "img_VdE9boFUhoqRpcxPcEBc",
+     "file_token": "VdE9boFUhoqRpcxPcEBciston9g",
+     "name": "Screenshot 2026-03-06 171821.png",
+     "local_path": "images/img_VdE9boFUhoqRpcxPcEBc.png"
+    },
+    {
+     "image_id": "img_O2QNbt9uOozD27xvZQFc",
+     "file_token": "O2QNbt9uOozD27xvZQFcZzrInrc",
+     "name": "截屏2026-03-06 16.40.20.png",
+     "local_path": "images/img_O2QNbt9uOozD27xvZQFc.png"
+    },
+    {
+     "image_id": "img_I6V9bJLvVopB5Vxjttac",
+     "file_token": "I6V9bJLvVopB5Vxjttac5Ne7nEg",
+     "name": "Screenshot 2026-03-06 172951.png",
+     "local_path": "images/img_I6V9bJLvVopB5Vxjttac.png"
+    },
+    {
+     "image_id": "img_HG0kbrgPsocBfIxxvwUc",
+     "file_token": "HG0kbrgPsocBfIxxvwUcvDacnpe",
+     "name": "Screenshot 2026-03-06 173026.png",
+     "local_path": "images/img_HG0kbrgPsocBfIxxvwUc.png"
+    },
+    {
+     "image_id": "img_QriQbrImho24jSxKrB8c",
+     "file_token": "QriQbrImho24jSxKrB8czKFznmh",
+     "name": "Screenshot 2026-03-06 173304.png",
+     "local_path": "images/img_QriQbrImho24jSxKrB8c.png"
+    },
+    {
+     "image_id": "img_C6r6bgWe0oZ2Mtx9wXsc",
+     "file_token": "C6r6bgWe0oZ2Mtx9wXscd1lcndg",
+     "name": "Screenshot 2026-03-06 173401.png",
+     "local_path": "images/img_C6r6bgWe0oZ2Mtx9wXsc.png"
+    },
+    {
+     "image_id": "img_O0o7bOzmaogny1xoKDQc",
+     "file_token": "O0o7bOzmaogny1xoKDQcBoH9nJg",
+     "name": "Screenshot 2026-03-06 173602.png",
+     "local_path": "images/img_O0o7bOzmaogny1xoKDQc.png"
+    },
+    {
+     "image_id": "img_Qow3bo4PNolIdjx897rc",
+     "file_token": "Qow3bo4PNolIdjx897rcK4xpntP",
+     "name": "Screenshot 2026-03-06 171821.png",
+     "local_path": "images/img_Qow3bo4PNolIdjx897rc.png"
+    }
+   ],
+   "source_locator": "PGUfdzyrdolXBWxQQTrcL0rLnjs",
+   "source_revision": 8268,
+   "content_hash": "df532d665acbcbdda04372212509fc72c15090c1818a76518e53315bd2067d5d"
+  },
+  {
+   "id": "qa_51ae984a57035853",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（二）路径更改相关："
+   ],
+   "category": "（二）路径更改相关：",
+   "symptom_tags": [
+    "安装无法更改路径-1"
+   ],
+   "title": "1、安装Cakewalk Sonar时，上面的路径无法更改",
+   "raw_title": "1、【安装无法更改路径-1】安装Cakewalk Sonar时，上面的路径无法更改",
+   "body": "A：不是改不了的，这是因为你第一次安装Cakewalk时，擅自修改了安装路径。如果只有这边这个位置有问题的话，按理来说不会影响使用的。只需要打开Cakewalk Sonar的参数设置（快捷键P）——VST设置——VST扫描路径中，添加和我一样的路径（右侧）即可。\n如果改了后还是找不到Sonar自带的音源，可以看到下一条",
+   "images": [
+    {
+     "image_id": "img_NZDRbRaI5oGa28xE70Mc",
+     "file_token": "NZDRbRaI5oGa28xE70McvljonPb",
+     "name": "截屏2026-02-16 14.17.34.png",
+     "local_path": "images/img_NZDRbRaI5oGa28xE70Mc.png"
+    },
+    {
+     "image_id": "img_VEGDbhx47oSNmpxLnX0c",
+     "file_token": "VEGDbhx47oSNmpxLnX0cb1r7nug",
+     "name": "截屏2026-02-16 14.17.22.png",
+     "local_path": "images/img_VEGDbhx47oSNmpxLnX0c.png"
+    },
+    {
+     "image_id": "img_SAj6byARhomQGQxt6F7c",
+     "file_token": "SAj6byARhomQGQxt6F7cWv9ZnIg",
+     "name": "截屏2026-02-16 14.22.13.png",
+     "local_path": "images/img_SAj6byARhomQGQxt6F7c.png"
+    }
+   ],
+   "source_locator": "C3LxdkWYfovm0Gx33zJcP23jncb",
+   "source_revision": 8268,
+   "content_hash": "1c5e6beb9cff0459283ed27ac6a2a893c74e915e9a59fe929f3166fad99bd2cb"
+  },
+  {
+   "id": "qa_bc551550b8c3f314",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（二）路径更改相关："
+   ],
+   "category": "（二）路径更改相关：",
+   "symptom_tags": [
+    "安装无法更改路径-2"
+   ],
+   "title": "2、安装Cakewalk Sonar时，上面的所有路径都无法更改",
+   "raw_title": "2、【安装无法更改路径-2】安装Cakewalk Sonar时，上面的所有路径都无法更改",
+   "body": "（1）首先用Windows设置（右键底部的Windows 图标）中的“安装的应用”删除Cakewalk Sonar（不要手动直接删文件夹）\n（2）卸载后，回到桌面上使用快捷键Windows+R，打开“运行”，输入Regedit，点击“确定”\n（3）进去后我们把左侧目录滑到最上方，选择“计算机”，按下快捷键Ctrl+F，打开“查找”，输入Cakewalk，点击“查找下一个”。搜索出来后我们选中搜索出来的文件使用delete删除或者右键删除，如果提示“可能损坏系统文件”，我们无视，继续删除。（注意别删错，这里我们只删和Cakewalk以及Sonar有关的文件）删掉一个后，我们使用快捷键F3搜索下一个（有些电脑键盘需要按下Fn+F3或者Fn+3，具体看你的电脑键盘是怎么样的），然后删除下一个，再F3，删除，F3删除，直到没有可删的Cakewalk相关的东西为止。\n（4）现在我们重新安装Cakewalk Sonar，就恢复到可以正常可更改路径的状态了，这次一定不能更改任何路径！一定不能更改任何路径！一定不能更改任何路径！确保这步的路径是图片中的这样子。然后下一步下一步安装完成即可。",
+   "images": [
+    {
+     "image_id": "img_Uz3JbHD0oonYwOxhuQCc",
+     "file_token": "Uz3JbHD0oonYwOxhuQCcIyC7nvf",
+     "name": "Screenshot 2026-03-06 172951.png",
+     "local_path": "images/img_Uz3JbHD0oonYwOxhuQCc.png"
+    },
+    {
+     "image_id": "img_SIWhby5dboq6Koxcb74c",
+     "file_token": "SIWhby5dboq6Koxcb74cNMdvn7c",
+     "name": "Screenshot 2026-03-06 173026.png",
+     "local_path": "images/img_SIWhby5dboq6Koxcb74c.png"
+    },
+    {
+     "image_id": "img_NVB0bl8oXo9WunxM51bc",
+     "file_token": "NVB0bl8oXo9WunxM51bcPePpnbc",
+     "name": "Screenshot 2026-03-06 173304.png",
+     "local_path": "images/img_NVB0bl8oXo9WunxM51bc.png"
+    },
+    {
+     "image_id": "img_Y29TbrgvbopM4Zx4c7zc",
+     "file_token": "Y29TbrgvbopM4Zx4c7zcSCnsnae",
+     "name": "Screenshot 2026-03-06 173401.png",
+     "local_path": "images/img_Y29TbrgvbopM4Zx4c7zc.png"
+    },
+    {
+     "image_id": "img_LvbDbW11BoyzfzxrzTbc",
+     "file_token": "LvbDbW11BoyzfzxrzTbcRWYmnCe",
+     "name": "Screenshot 2026-03-06 173602.png",
+     "local_path": "images/img_LvbDbW11BoyzfzxrzTbc.png"
+    },
+    {
+     "image_id": "img_KQSibYpAnoQFEoxYtdSc",
+     "file_token": "KQSibYpAnoQFEoxYtdScgoIDnZg",
+     "name": "Screenshot 2026-03-06 171821.png",
+     "local_path": "images/img_KQSibYpAnoQFEoxYtdSc.png"
+    }
+   ],
+   "source_locator": "R2CkdmICToSsxvxbWF3czPmNnCb",
+   "source_revision": 8268,
+   "content_hash": "4a1967198df41950aab77d52c615ece681ff57e1741c3273d1de8788f0b194d0"
+  },
+  {
+   "id": "qa_cbf3575d07682eee",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（三）报错闪退相关："
+   ],
+   "category": "（三）报错闪退相关：",
+   "symptom_tags": [
+    "安装报错"
+   ],
+   "title": "1、Cakewalk Product Center（下载器）打开后提示无法连接到互联网怎么办？",
+   "raw_title": "1、【安装报错】Cakewalk Product Center（下载器）打开后提示无法连接到互联网怎么办？",
+   "body": "A：可能是电脑的防火墙的问题，或者网络状态比较差。可以直接安装我的那个整合包，那些都是从安装中心里下载的，来源都是正版的，就是帮你省了一步下载“安装中心”的时间。使用流程就是用整合包安装本体后，直接打开本体，登录账号就可以使用了。\n之后的版本更新都在本体的起始页面的Product Updates中进行即可（国内网络打开这个位置的时候有概率崩溃，但是不会出现工程丢失的情况）",
+   "images": [
+    {
+     "image_id": "img_CEdjb8kOjoSVdNxgQYgc",
+     "file_token": "CEdjb8kOjoSVdNxgQYgcJ8eonec",
+     "name": "截屏2026-02-16 14.22.57.png",
+     "local_path": "images/img_CEdjb8kOjoSVdNxgQYgc.png"
+    },
+    {
+     "image_id": "img_Lw6bb9nFgojouox1HyTc",
+     "file_token": "Lw6bb9nFgojouox1HyTcqxh5nTm",
+     "name": "截屏2026-02-16 14.26.31.png",
+     "local_path": "images/img_Lw6bb9nFgojouox1HyTc.png"
+    }
+   ],
+   "source_locator": "PJdodV9Uxo7G1LxzGsFcC4ZXn5e",
+   "source_revision": 8268,
+   "content_hash": "69d471714b87e6e6bf5531a18f3e507016bea513d3e026941162fbd168452853"
+  },
+  {
+   "id": "qa_5d575b5f322bf075",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（三）报错闪退相关："
+   ],
+   "category": "（三）报错闪退相关：",
+   "symptom_tags": [
+    "导出报错"
+   ],
+   "title": "2、Cakewalk导出音频时，提示处理混缩时出现内部错误，操作失败",
+   "raw_title": "2、【导出报错】Cakewalk导出音频时，提示处理混缩时出现内部错误，操作失败",
+   "body": "A：没有外置声卡的朋友会偶尔遇到，在切换系统的默认播放设备的时候有出现过。解决方法是在Cakewalk Sonar的参数设置（快捷键P）——音频——录制和回放——驱动模式，从wasapi改成asio，再改回wasapi即可解决。",
+   "images": [
+    {
+     "image_id": "img_YNLubM5XEo2hW4xmKy8c",
+     "file_token": "YNLubM5XEo2hW4xmKy8clSnpnBe",
+     "name": "截屏2026-02-16 14.16.25.png",
+     "local_path": "images/img_YNLubM5XEo2hW4xmKy8c.png"
+    },
+    {
+     "image_id": "img_Ha2WbI2mXoKsprxqqRtc",
+     "file_token": "Ha2WbI2mXoKsprxqqRtc1fxGnJc",
+     "name": "截屏2026-03-10 06.29.12.png",
+     "local_path": "images/img_Ha2WbI2mXoKsprxqqRtc.png"
+    }
+   ],
+   "source_locator": "B6gHdeflwoX5MPxC1X9ckf8Dnfb",
+   "source_revision": 8268,
+   "content_hash": "5f039eb297d7181c0de714c49207a377b4dd848cb49b539a4575ba371abd5a52"
+  },
+  {
+   "id": "qa_abca32f41f397e6d",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（三）报错闪退相关："
+   ],
+   "category": "（三）报错闪退相关：",
+   "symptom_tags": [
+    "更新报错"
+   ],
+   "title": "3、Cakewalk更新版本时出现以下报错怎么办？",
+   "raw_title": "3、【更新报错】Cakewalk更新版本时出现以下报错怎么办？",
+   "body": "A：把Cakewalk sonar完全关了以后再更新就可以了，这个是Cakewalk的后台没完全关上导致的\n更新安装包在你电脑的下载文件夹中有个“Cakewalk”文件夹，点进去就能看到刚刚下载的Sonar新安装包",
+   "images": [
+    {
+     "image_id": "img_BHLSbeLv6o8saqx1InOc",
+     "file_token": "BHLSbeLv6o8saqx1InOcuYJ8n3f",
+     "name": "截屏2026-02-16 15.09.59.png",
+     "local_path": "images/img_BHLSbeLv6o8saqx1InOc.png"
+    }
+   ],
+   "source_locator": "LRUMda2QKo23WxxLQsNcZl3sn0l",
+   "source_revision": 8268,
+   "content_hash": "2dad48248dd65030ddee548828bddc49d68862e6f0529eed4d3043dc4445d69e"
+  },
+  {
+   "id": "qa_53610c03119cbace",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（三）报错闪退相关："
+   ],
+   "category": "（三）报错闪退相关：",
+   "symptom_tags": [
+    "缺少DLL文件"
+   ],
+   "title": "4、安装Cakewalk Sonar打开后提示缺少DLL文件怎么办？",
+   "raw_title": "4、【缺少DLL文件】安装Cakewalk Sonar打开后提示缺少DLL文件怎么办？",
+   "body": "A：这种问题极为少见，一般是电脑的杀毒软件乱杀毒导致的，我们先把杀毒软件、电脑管家都卸载了。再重新安装Cakewalk Sonar试试。\n如果不行，检查系统版本，Cakewalk要求最新的Win10版本或者较新的Win11版本，如果版本不符合的话，可以先升级下系统版本，再重装Cakewalk。\n如果上述两种方法用了，还是不行的话，可以尝试正确安装以下文件来解决这个问题（本问题涉及的所有修复文件来自于网络，本人非计算机专业，对此完全不懂，仅通过互联网查询获取以下文件，不对其效果以及后续任何影响负任何责任），如果对下述文件有所顾虑，可自行通过搜索引擎、AI搜索下载对应文件，并放到正确的位置。\n1、针对图1的lame_enc.dll的修复文件（来源https://lame.buanzo.org/#lamewindl）\n云盘下载 https://pan.quark.cn/s/1fa82b7072cc\n2、针对图2的iZotope_Radius_x64.dll的修复文件\n（来源https://blog.csdn.net/2503_92502216/article/details/148807775）\n云盘下载 https://pan.quark.cn/s/d764a1a633c8\n（1）打开下载的压缩文件，将 DLL 文件解压到电脑上的任意一个自己知道的地方。\n（2）将文件放置在正确的文件夹中：32 位 → C:\\Windows\\SysWOW6464 位 → C:\\Windows\\System32\n（3）确保覆盖已有的文件。\n（4）重启电脑。\n3、针对图3的libmp3lame.dll的修复文件（来源https://cn.dll-files.com/libmp3lame.dll.html）\n云盘下载 https://pan.quark.cn/s/4bde399d1f7f\n（1）打开下载的压缩文件，将 DLL 文件解压到电脑上的任意一个自己知道的地方。\n（2）将文件放置在正确的文件夹中：32 位 → C:\\Windows\\SysWOW6464 位 → C:\\Windows\\System32\n（3）确保覆盖已有的文件。\n（4）重启电脑。\n4、针对图4的sndfile.dll的修复文件\n（来源https://www.dllme.com/dll/files/sndfile/1408b92fd6bdf2cfbcdf889a4a048abb）\n云盘下载 https://pan.quark.cn/s/c2ebbbb9884e\n（1）打开下载的压缩文件，将 DLL 文件解压到电脑上的任意一个自己知道的地方。\n（2）将文件放置在正确的文件夹中：32 位 → C:\\Windows\\SysWOW6464 位 → C:\\Windows\\System32\n（3）确保覆盖已有的文件。\n（4）重启电脑。",
+   "images": [
+    {
+     "image_id": "img_DmhPbbVmSosstyxd5gcc",
+     "file_token": "DmhPbbVmSosstyxd5gccxY72nbh",
+     "name": "截屏2026-03-08 00.45.56.png",
+     "local_path": "images/img_DmhPbbVmSosstyxd5gcc.png"
+    },
+    {
+     "image_id": "img_Pu3fbAf05oHoqlxva1Qc",
+     "file_token": "Pu3fbAf05oHoqlxva1QcQ3dmnHc",
+     "name": "截屏2026-03-08 00.45.51.png",
+     "local_path": "images/img_Pu3fbAf05oHoqlxva1Qc.png"
+    },
+    {
+     "image_id": "img_HOk4bmbY9oG3OixEpl3c",
+     "file_token": "HOk4bmbY9oG3OixEpl3c1WFwnbe",
+     "name": "截屏2026-03-08 00.45.47.png",
+     "local_path": "images/img_HOk4bmbY9oG3OixEpl3c.png"
+    },
+    {
+     "image_id": "img_ZnAWbGp0cobU8PxAZYIc",
+     "file_token": "ZnAWbGp0cobU8PxAZYIcUVePnwh",
+     "name": "截屏2026-03-08 00.45.42.png",
+     "local_path": "images/img_ZnAWbGp0cobU8PxAZYIc.png"
+    }
+   ],
+   "source_locator": "AbRTdGPE8oxmwFxACi8czXDHnWd",
+   "source_revision": 8268,
+   "content_hash": "82bacfccfa1d60679a1b2f215d2eaab4fc3059fcebd5f7eb35556a9e6795c2e4"
+  },
+  {
+   "id": "qa_909bfffd5aeb6ee1",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（三）报错闪退相关："
+   ],
+   "category": "（三）报错闪退相关：",
+   "symptom_tags": [
+    "打开就闪退"
+   ],
+   "title": "5、Cakewalk打开的时候就闪退是怎么回事？VC库net库都安装了，管理员身份运行都无法解决",
+   "raw_title": "5、【打开就闪退】Cakewalk打开的时候就闪退是怎么回事？VC库net库都安装了，管理员身份运行都无法解决",
+   "body": "A：使用DriectX Repair修复即可，按照我这期视频完整操作一遍即可\nhttps://www.bilibili.com/video/BV188YMz6Ezv",
+   "images": [
+    {
+     "image_id": "img_K2PdbCPCmoyosDx05eJc",
+     "file_token": "K2PdbCPCmoyosDx05eJcsCpDnrf",
+     "name": "截屏2026-02-16 14.28.50.png",
+     "local_path": "images/img_K2PdbCPCmoyosDx05eJc.png"
+    },
+    {
+     "image_id": "img_BYU6bHC7FofCDTxzJYPc",
+     "file_token": "BYU6bHC7FofCDTxzJYPc6h53nmh",
+     "name": "截屏2026-02-16 14.33.41.png",
+     "local_path": "images/img_BYU6bHC7FofCDTxzJYPc.png"
+    }
+   ],
+   "source_locator": "NuPedeuEiowFeTx1HWkcPfAlnbe",
+   "source_revision": 8268,
+   "content_hash": "43b78399fa76e6a6cfce8110b30dce2e4fa7bdacdf7282da4a1850a69c1d4186"
+  },
+  {
+   "id": "qa_d72fdb222f2f48a6",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（四）声音相关："
+   ],
+   "category": "（四）声音相关：",
+   "symptom_tags": [
+    "录音延迟过大"
+   ],
+   "title": "1、Cakewalk Sonar连接综合效果器，用效果器充当声卡进行吉他录音，但是延迟很大怎么办？",
+   "raw_title": "1、【录音延迟过大】Cakewalk Sonar连接综合效果器，用效果器充当声卡进行吉他录音，但是延迟很大怎么办？",
+   "body": "A：先去你的声卡或者效果器官网下载对应驱动，然后打开Cakewalk的参数设置（快捷键P），在下图这里选择ASIO，然后到驱动设置中，调低缓存大小，一般设置在128或者256，数值越低越容易爆音，数值越高延迟越高。\n这个问题与什么宿主无关，只和你的设置或者你的声卡的驱动有关。",
+   "images": [
+    {
+     "image_id": "img_Lsr4bDCuzo3y3VxuLrPc",
+     "file_token": "Lsr4bDCuzo3y3VxuLrPcU5ZInZg",
+     "name": "截屏2026-02-16 14.35.23.png",
+     "local_path": "images/img_Lsr4bDCuzo3y3VxuLrPc.png"
+    },
+    {
+     "image_id": "img_IVEabm2b1oDTQHxdF8wc",
+     "file_token": "IVEabm2b1oDTQHxdF8wcVANFnNe",
+     "name": "截屏2026-02-16 14.37.40.png",
+     "local_path": "images/img_IVEabm2b1oDTQHxdF8wc.png"
+    }
+   ],
+   "source_locator": "V8cqdIrEtod7Olxngn8c8FrVnfb",
+   "source_revision": 8268,
+   "content_hash": "cec7226bcec8427408ddab6a45fb6d6cb89fe92189606babbb7dc8bc9fc25e91"
+  },
+  {
+   "id": "qa_eae76a97c207c224",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（四）声音相关："
+   ],
+   "category": "（四）声音相关：",
+   "symptom_tags": [
+    "ASIO4ALL解决方案（较复杂）-无外置声卡，没声音"
+   ],
+   "title": "2.1、Cakewalk在使用中插入耳机，耳机没声音，外放仍然有声音/录制和播放时有失真电流声",
+   "raw_title": "2.1、【ASIO4ALL解决方案（较复杂）-无外置声卡，没声音】Cakewalk在使用中插入耳机，耳机没声音，外放仍然有声音/录制和播放时有失真电流声",
+   "body": "A：这种问题常见于没有外置声卡的朋友，可以简单理解为是电脑板载声卡的性能有限，或者驱动拉跨导致无法让耳机和音箱同时发声。\n解决方法有两种，你得按照自己的情况来选择\n（1）如果你的外放是指笔记本或者台式机的显示器的外放，不是专业的监听音箱，那么从专业的角度来看，你必须只使用耳机，因为你的外放是严重缺频的、声音不完整的，对于做音乐来说是不合格的。而且耳机也得是有线耳机，最好是能叫的出名字、型号的（为了能够用软件适当校准，让它尽量贴近专业监听耳机的声音），如果用游戏耳机、或者娱乐听歌的耳机也会对你听到的声音造成影响，最好是攒攒买个入门的监听耳机（这方面我并不是想挣你钱，我目前也没代理任何耳机品牌，只是希望你不要还没入门就把自己搞的听力受损，或者养成了错误的听音观）\n（2）如果你就是完全的娱乐玩玩，自己认为笔记本外放和娱乐游戏耳麦够你玩的，那就安装一个ASIO4ALL。\nhttps://zh-cn.asio4all.org/about/download-asio4all/\n然后打开Cakewalk的参数设置（快捷键P），将音频的“录制和回放”里的驱动模式改为ASIO，如果有弹窗让你改成Wasapi，就点否，然后点击音频的“驱动设置”，点击下图的“ASIO设置”，然后在右图里点亮你的耳机或者音箱的设备开关就会有声音了",
+   "images": [
+    {
+     "image_id": "img_W0uhbhIfroVTD7xJHXDc",
+     "file_token": "W0uhbhIfroVTD7xJHXDct0psnJf",
+     "name": "截屏2026-02-16 14.45.23.png",
+     "local_path": "images/img_W0uhbhIfroVTD7xJHXDc.png"
+    },
+    {
+     "image_id": "img_UzhtbQvAEoCFxxxgUFSc",
+     "file_token": "UzhtbQvAEoCFxxxgUFScJGAKn7g",
+     "name": "微信图片_2026-02-16_145337_468.jpg",
+     "local_path": "images/img_UzhtbQvAEoCFxxxgUFSc.jpg"
+    },
+    {
+     "image_id": "img_FL61bjOqjo2aiJxTeZkc",
+     "file_token": "FL61bjOqjo2aiJxTeZkcv81Wn5e",
+     "name": "微信图片_2026-02-16_145341_900.jpg",
+     "local_path": "images/img_FL61bjOqjo2aiJxTeZkc.jpg"
+    }
+   ],
+   "source_locator": "NVo4dDvcrojeDDxrywec5G8XnDe",
+   "source_revision": 8268,
+   "content_hash": "2d426e859690c8d3dda60877c5dc371f4be03bee97d10528dd96584ab035bb51"
+  },
+  {
+   "id": "qa_94d508729627edb7",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（四）声音相关："
+   ],
+   "category": "（四）声音相关：",
+   "symptom_tags": [
+    "FL asio解决方案（较简单）-无外置声卡，没声音"
+   ],
+   "title": "2.2、没声音/默认延迟大/失真电流声",
+   "raw_title": "2.2、【FL asio解决方案（较简单）-无外置声卡，没声音】没声音/默认延迟大/失真电流声",
+   "body": "这是无外置声卡的独立ASIO情况下的常见问题\n除了安装ASIO4ALL可以解决以外，也可以使用FL ASIO来解决，FL ASIO的安装使用会更简单\n安装包在这： https://pan.quark.cn/s/5e03f22aa596\n下载后直接安装\n安装完成后按照下图打开Cakewalk Sonar的设置进行操作（快捷键P）\n注意点：第5、6步如果FL Studio ASIO为灰色，那说明这个输入输出面板里还有别的选项是勾选状态，只需要取消勾选那些选项就可以勾选FL的了\n注意点：第9步选择你实际的麦克风和播放设备（音响or耳机或者别的什么系统音频选项，具体得看你的电脑，每台电脑都可能不一样，一般选默认的这个就行，如果没声再到这设置）\n注意点：第10步这里，数值越高，延迟越高，但是越不吃性能，越不容易出现噼里啪啦的杂音\n一般我们录音选256，混音选512或者1024，编曲如果是大工程可能需要选2048",
+   "images": [
+    {
+     "image_id": "img_ROa5bW70Xo1pgfxoXQ1c",
+     "file_token": "ROa5bW70Xo1pgfxoXQ1chTPWn5c",
+     "name": "截屏2026-07-13 17.05.49.png",
+     "local_path": "images/img_ROa5bW70Xo1pgfxoXQ1c.png"
+    },
+    {
+     "image_id": "img_MeEtbNuSHoMvsyxucVNc",
+     "file_token": "MeEtbNuSHoMvsyxucVNcQxtsnvg",
+     "name": "截屏2026-07-13 17.06.19.png",
+     "local_path": "images/img_MeEtbNuSHoMvsyxucVNc.png"
+    },
+    {
+     "image_id": "img_Gy4ib7KAxoZ5iRxPkusc",
+     "file_token": "Gy4ib7KAxoZ5iRxPkuscqssanjd",
+     "name": "截屏2026-07-13 17.06.47.png",
+     "local_path": "images/img_Gy4ib7KAxoZ5iRxPkusc.png"
+    },
+    {
+     "image_id": "img_EkHrbfw31oUcvdxOzuLc",
+     "file_token": "EkHrbfw31oUcvdxOzuLcwm1bnah",
+     "name": "截屏2026-07-13 17.07.24.png",
+     "local_path": "images/img_EkHrbfw31oUcvdxOzuLc.png"
+    },
+    {
+     "image_id": "img_DC3jblcRAoDEwcxmgJ9c",
+     "file_token": "DC3jblcRAoDEwcxmgJ9chHX3nTf",
+     "name": "截屏2026-07-13 17.07.59.png",
+     "local_path": "images/img_DC3jblcRAoDEwcxmgJ9c.png"
+    }
+   ],
+   "source_locator": "LTX7dRwO2owjURxARcncPoUNnRd",
+   "source_revision": 8268,
+   "content_hash": "17ab01ff0af7d28976ac4491e444267d424208039e43317fced39f26e8bb62a1"
+  },
+  {
+   "id": "qa_49ac5bed5c22bec1",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（四）声音相关："
+   ],
+   "category": "（四）声音相关：",
+   "symptom_tags": [
+    "没声音"
+   ],
+   "title": "3、声卡设置没问题，但是Cakewalk没声音怎么办？",
+   "raw_title": "3、【没声音】声卡设置没问题，但是Cakewalk没声音怎么办？",
+   "body": "A：\n（1）第一点不要使用Xsampler这个音源，这个是空的采样器，如果没有别的音源，可以去看有福同享全家桶2.0安装自己需要的音源\n（2）第二点是不能用无线的音箱或者耳机，这类设备除了在宿主里容易设置不好输出导致没声音，还有就是音质差、延迟大、对系统占用大、采样率会不匹配。对于做音乐这种专业的事情来说，这是完全的弊大于利的。\n（3）第三点是使用的Bandlab音色，这类音色第一次使用的时候需要现场自动下载，没下载完成时没声音\n解决方法操作如下，第一步是点开音源界面，第二步是点开音源界面的3个点，然后选择“Download All Soundbanks”（如果是灰色的，就重新加载一次这个音源），然后等待下载完成即可，如无法解决，请及时联系小闻（Xiaowenn1107）\n下载时会提示这个，点击OK\n（4）第四点，其余非以上类型的问题可以按照我这期视频去排查没声音的问题根源。\nhttps://www.bilibili.com/video/BV1hqoXYmEgE",
+   "images": [
+    {
+     "image_id": "img_Pg3qbSA1eoNKl1xgH4zc",
+     "file_token": "Pg3qbSA1eoNKl1xgH4zcG2Eon7c",
+     "name": "截屏2026-08-03 21.57.12.png",
+     "local_path": "images/img_Pg3qbSA1eoNKl1xgH4zc.png"
+    },
+    {
+     "image_id": "img_JjvKbreMboZMEjxURVMc",
+     "file_token": "JjvKbreMboZMEjxURVMchoLcnNh",
+     "name": "截屏2026-08-03 22.05.49.png",
+     "local_path": "images/img_JjvKbreMboZMEjxURVMc.png"
+    },
+    {
+     "image_id": "img_WHHVbG5q5osHX6x26LRc",
+     "file_token": "WHHVbG5q5osHX6x26LRcjj14nIe",
+     "name": "截屏2026-08-03 22.05.57.png",
+     "local_path": "images/img_WHHVbG5q5osHX6x26LRc.png"
+    }
+   ],
+   "source_locator": "Mz3fdCsqiorvdvx78VdcRNHCnUd",
+   "source_revision": 8268,
+   "content_hash": "937267cd014efc4bdca103ca54c2815641dea220fda9d00e078b47e85fda8f4d"
+  },
+  {
+   "id": "qa_ce77589cb8a26fe0",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（四）声音相关："
+   ],
+   "category": "（四）声音相关：",
+   "symptom_tags": [
+    "录音出现电音、电流声、失真"
+   ],
+   "title": "4、录制的时候，声音全是电流音、失真怎么办？",
+   "raw_title": "4、【录音出现电音、电流声、失真】录制的时候，声音全是电流音、失真怎么办？",
+   "body": "这种情况大概率是采样率不匹配的缘故。\n你用的是有独立ASIO驱动的声卡，那就尝试把驱动模式切换为ASIO和WASAPI专属，看看能不能解决\n（1）如果切换到WASAPI专属的时候不会有电音了，那就10000000%是你的采样率设置的问题（这个是Windows里的一个问题，不必深究，简单说就是你电脑里同时运行了两个不同采样率的软件，这就导致了采样点对不上，出现了变调、电音、电流声）\n（2）如果切换到ASIO就好了的话，那就说明原本驱动的问题，照理来说我们有独立声卡那肯定是优先使用ASIO驱动的。\n如果你没有独立声卡，那就按自己的需要点击下方蓝色字跳转去安装一个第三方虚拟声卡驱动\n2.1（更全面的方案）\n2.2 （更简单的方案）",
+   "images": [
+    {
+     "image_id": "img_NwknboOkTocNMgx9G0Qc",
+     "file_token": "NwknboOkTocNMgx9G0QcBEF3nZd",
+     "name": "截屏2026-08-05 17.50.49.png",
+     "local_path": "images/img_NwknboOkTocNMgx9G0Qc.png"
+    },
+    {
+     "image_id": "img_XUhtbHQ0ToSlEXxgFFAc",
+     "file_token": "XUhtbHQ0ToSlEXxgFFAcDBpKnlf",
+     "name": "截屏2026-08-05 17.51.22.png",
+     "local_path": "images/img_XUhtbHQ0ToSlEXxgFFAc.png"
+    }
+   ],
+   "source_locator": "TnapdFFNxoCRzWxXR63c24JHnwd",
+   "source_revision": 8268,
+   "content_hash": "f0939637c0578e23aa2b125d8c664f175529347f89258fc1e0068032f8a1715e"
+  },
+  {
+   "id": "qa_2b9ca0a093eb0c8d",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（四）声音相关："
+   ],
+   "category": "（四）声音相关：",
+   "symptom_tags": [
+    "“音轨串频”、乐器轨串音"
+   ],
+   "title": "5、播放中，有个轨道偶尔会出现其他轨道的音符怎么办？",
+   "raw_title": "5、【“音轨串频”、乐器轨串音】播放中，有个轨道偶尔会出现其他轨道的音符怎么办？",
+   "body": "A：这个问题首先是不要用MIDI轨，编曲就用乐器轨去加载音源就可以了。如果你没有使用MIDI轨，用的是乐器轨还是出现了这个问题，那么大概率是因为音源的设置中开启了“启用MIDI输出”，这会导致其他轨道读取这个轨道的MIDI信息，从而出现轨道A播放轨道B声音的情况。\n两种方法：\n方法一：\n我们只需要把所有乐器轨的“启用MIDI输出”都取消勾选即可解决这个问题\n方法二：\nAlt+9快捷键打开“音源架”，鼠标右键点击每个已加载的音源，取消勾选“启用MIDI输出”",
+   "images": [
+    {
+     "image_id": "img_OY6ObMW47ocnUxxwxCYc",
+     "file_token": "OY6ObMW47ocnUxxwxCYckvdYnJh",
+     "name": "1.png",
+     "local_path": "images/img_OY6ObMW47ocnUxxwxCYc.png"
+    },
+    {
+     "image_id": "img_MwohbHDyMo3mLIx1OuPc",
+     "file_token": "MwohbHDyMo3mLIx1OuPcTRU5ntx",
+     "name": "19f045a6236000709e7fa8f044cbe557.png",
+     "local_path": "images/img_MwohbHDyMo3mLIx1OuPc.png"
+    },
+    {
+     "image_id": "img_DU2abh6eSoouzOxpD0Xc",
+     "file_token": "DU2abh6eSoouzOxpD0XcbbR6n5e",
+     "name": "截屏2026-07-12 00.51.00.png",
+     "local_path": "images/img_DU2abh6eSoouzOxpD0Xc.png"
+    }
+   ],
+   "source_locator": "Tq6XdoIBmoIQHWxRWo0cdQuwnvg",
+   "source_revision": 8268,
+   "content_hash": "8a75f013849a4446fe23d79f9afbded81cc84e3398d0c89fae3f3e83b1b1c78b"
+  },
+  {
+   "id": "qa_635918b97b2f560c",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（五）登录激活相关："
+   ],
+   "category": "（五）登录激活相关：",
+   "symptom_tags": [
+    "如何登录激活"
+   ],
+   "title": "1、Cakewalk sonar如何登录激活？",
+   "raw_title": "1、【如何登录激活】Cakewalk sonar如何登录激活？",
+   "body": "（1）打开Cakewalk Sonar，随便创建一个工程，看到顶部菜单栏“帮助”——“登录Bandlab”\n（2）在弹出页面中，如果你没有Bandlab账号，就点击下方的Sign up，进行注册，一般情况下不需要魔法、梯子 。\n（3）在注册页面填写必须的信息，填写完成后，点击Sign up即可注册。\n（4）随后你的邮箱会收到一封确认邮件，进去点击里面的按钮或者链接，跳转到确认界面，进行账号确认即可完成账号注册。\n（5）然后我再回到cakewalk sonar顶部菜单栏的“帮助”——“登录Bandlab”，输入你刚刚注册的账号密码，再点击Log in，即可完成Cakewalk Sonar的免费账号激活",
+   "images": [
+    {
+     "image_id": "img_GwcPbfUQkoGhTOxXjUMc",
+     "file_token": "GwcPbfUQkoGhTOxXjUMctUr5nGd",
+     "name": "截屏2026-07-06 01.30.00.png",
+     "local_path": "images/img_GwcPbfUQkoGhTOxXjUMc.png"
+    },
+    {
+     "image_id": "img_DjXqbSPu1oqt2DxE2Rmc",
+     "file_token": "DjXqbSPu1oqt2DxE2RmcVUCbn7e",
+     "name": "截屏2026-07-06 01.32.09.png",
+     "local_path": "images/img_DjXqbSPu1oqt2DxE2Rmc.png"
+    },
+    {
+     "image_id": "img_Adtvbq8p7orkTNxzyn2c",
+     "file_token": "Adtvbq8p7orkTNxzyn2cmHi8nhd",
+     "name": "截屏2026-07-06 01.36.41.png",
+     "local_path": "images/img_Adtvbq8p7orkTNxzyn2c.png"
+    },
+    {
+     "image_id": "img_RwR6bKFa6o7qh3xM8WNc",
+     "file_token": "RwR6bKFa6o7qh3xM8WNc6HFmnmS",
+     "name": "截屏2026-07-06 01.32.09.png",
+     "local_path": "images/img_RwR6bKFa6o7qh3xM8WNc.png"
+    }
+   ],
+   "source_locator": "CheUdKdnBoHSCwxTfVscUPPNnAq",
+   "source_revision": 8268,
+   "content_hash": "e7299693b2d6b80cb389c1f1833faec2efa85a6575133e37000c85575ae91867"
+  },
+  {
+   "id": "qa_539031cbf1820779",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（五）登录激活相关："
+   ],
+   "category": "（五）登录激活相关：",
+   "symptom_tags": [
+    "无法激活"
+   ],
+   "title": "2、登录后，网页提示绿色标志，但是Cakewalk还是未激活怎么办？",
+   "raw_title": "2、【无法激活】登录后，网页提示绿色标志，但是Cakewalk还是未激活怎么办？",
+   "body": "A：一般来说是电脑的防火墙或者杀毒软件的问题，把防火墙关了，杀毒软件删了，一般就好了。\n如果还不行，那就使用离线激活的方式\n离线激活流程：在cakewalk里 顶栏——帮助 ——离线激活 —— 导出激活请求 ，保存crq文件到你知道的地方，弹窗里填写你的bandlab的用户名（不是邮箱）。安装cakewalk product center（又称Cakewalk下载器）后打开并登录，左下角有一个offline activation的选项，点击后，打开之前保存的crq文件，生成dat格式的激活响应并保存到自己知道的位置。接着打开cakewalk将激活响应按照 顶栏——帮助——离线激活——导入激活响应 即可",
+   "images": [
+    {
+     "image_id": "img_ZNXbbfZBFog6MjxJrJfc",
+     "file_token": "ZNXbbfZBFog6MjxJrJfcLxptnOd",
+     "name": "截屏2026-02-16 15.00.45.png",
+     "local_path": "images/img_ZNXbbfZBFog6MjxJrJfc.png"
+    }
+   ],
+   "source_locator": "BB6zdfGHToYtVgxlKMXcx2D1nl1",
+   "source_revision": 8268,
+   "content_hash": "98423fd29b39580c57530e87d1bbb11f4f7a222e37e472fc9069c721beb7bc1e"
+  },
+  {
+   "id": "qa_05278121db179f2d",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（五）登录激活相关："
+   ],
+   "category": "（五）登录激活相关：",
+   "symptom_tags": [
+    "无法激活"
+   ],
+   "title": "3、第一次打开Cakewalk的时候出现以下报错\"You must have a web browser installed on your computer...\"怎么办？",
+   "raw_title": "3、【无法激活】第一次打开Cakewalk的时候出现以下报错\"You must have a web browser installed on your computer...\"怎么办？",
+   "body": "A：将windows自带的Edge浏览器设置为默认浏览器即可解决",
+   "images": [
+    {
+     "image_id": "img_Z7JbbUwrxoIdkKx5pg3c",
+     "file_token": "Z7JbbUwrxoIdkKx5pg3coTZcnzf",
+     "name": "截屏2026-02-16 15.05.46.png",
+     "local_path": "images/img_Z7JbbUwrxoIdkKx5pg3c.png"
+    }
+   ],
+   "source_locator": "XuTZd8dJ2oDoowxUgx9c1F6snzb",
+   "source_revision": 8268,
+   "content_hash": "77be32cd0e8fe51564a897a348c11ce26928fff4c42b4f3a4193cd1fea7b13d8"
+  },
+  {
+   "id": "qa_57039e693c3e9ac7",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（五）登录激活相关："
+   ],
+   "category": "（五）登录激活相关：",
+   "symptom_tags": [
+    "无法登录"
+   ],
+   "title": "4、Sonar本体和下载器，均提示无网络连接或者防火墙问题",
+   "raw_title": "4、【无法登录】Sonar本体和下载器，均提示无网络连接或者防火墙问题",
+   "body": "目前收到6名朋友出现该问题，但是我的电脑上的Sonar还是正常的。这六位朋友的电脑有些共性的问题。\n总结起来就是系统层面的问题、防火墙的问题、网络的问题\n（1）遇到问题的朋友多数都是一些从非官方获取的Win10镜像的，可能这会导致缺少了一些必备的系统组件，进而导致Cakewalk Sonar无法使用。解决方法就是通过微软官网的Win 镜像更新系统。照理来说更新后就好。那如果更新后还是不行，那就要考虑到win的复杂性，说不定是某个驱动和系统组件或者其他的未知软件冲突导致出现问题，这里的话，我们就可以看到Cakewalk官方的支持中，可以查到目前Sonar推荐的系统是Win11及以上，Win10版本官方没有做测试，所以最佳的解决方法，就是更新到Win11。\n（2）电脑上有三四个杀毒软件、防火墙也是开启的状态，这可能会导致软件无法唤起登录网页\n（3）都是有线网络。可以尝试使用无线网络，连接手机热点进行登录激活",
+   "images": [
+    {
+     "image_id": "img_QkQBbyIdYoRhrixtuBRc",
+     "file_token": "QkQBbyIdYoRhrixtuBRchR0VnBg",
+     "name": "截屏2026-02-25 14.29.21.png",
+     "local_path": "images/img_QkQBbyIdYoRhrixtuBRc.png"
+    },
+    {
+     "image_id": "img_AbHMbyECUoiACEx8MjTc",
+     "file_token": "AbHMbyECUoiACEx8MjTcqLZfnxg",
+     "name": "截屏2026-02-25 14.16.06.png",
+     "local_path": "images/img_AbHMbyECUoiACEx8MjTc.png"
+    }
+   ],
+   "source_locator": "Jsyed2JMqozCbPxpwj5cpqj3n0g",
+   "source_revision": 8268,
+   "content_hash": "01dd40b38c2698c9d0051521acde542cd07b5587d2adb402558665f4f890bd45"
+  },
+  {
+   "id": "qa_d7852cb8e4a2e829",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（六）跨平台工作相关："
+   ],
+   "category": "（六）跨平台工作相关：",
+   "symptom_tags": [
+    "Bandlab与Sonar互通"
+   ],
+   "title": "1、如何把 BandLab 工程直接转移到Cakewalk Sonar中继续制作？",
+   "raw_title": "1、【Bandlab与Sonar互通】如何把 BandLab 工程直接转移到Cakewalk Sonar中继续制作？",
+   "body": "如果你已经在手机或者网页的BandLab中创作了音乐Demo，希望在电脑上的 Cakewalk Sonar 中继续深入制作，比如编曲、混音、母带。那就可以看到Cakewalk独家的功能，他是目前多端互通做的最好的宿主。Cakewalk Sonar 支持直接在线加载你的 BandLab 工程，不需要会员、不需要花钱买云端空间。\n操作方式如下：\n（1）点击顶部菜单栏的 文件  >  起始页面 >  Online Projects\n（2）选择位于左上角的齿轮图标，如下图，会显示一系列的选项，在这里选择你想要导入的工程类型。\n然后双击任意一个工程，稍等一会儿即可打开这个工程！",
+   "images": [
+    {
+     "image_id": "img_Uc2GbV7WOo84jDxWvNWc",
+     "file_token": "Uc2GbV7WOo84jDxWvNWcXChbnQc",
+     "name": "Uc2GbV7WOo84jDxWvNWcXChbnQc.png",
+     "local_path": "images/img_Uc2GbV7WOo84jDxWvNWc.png"
+    }
+   ],
+   "source_locator": "FmI5dxocworUu4xfqTgcSz97nRb",
+   "source_revision": 8268,
+   "content_hash": "7a2059542d100c6a1e0c35a45ccabc6647fd90b876a3fc06f17b5f0591f7f48e"
+  },
+  {
+   "id": "qa_c0347bc7c0f4ee70",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（七）连接MIDI设备相关："
+   ],
+   "category": "（七）连接MIDI设备相关：",
+   "symptom_tags": [
+    "MIDI键盘接上没声音"
+   ],
+   "title": "1、如何连接MIDI键盘（以森林岛W25为例）",
+   "raw_title": "1、【MIDI键盘接上没声音】如何连接MIDI键盘（以森林岛W25为例）",
+   "body": "（1）将MIDI键盘连接至电脑上，通过官方激活设备，并且安装必要的驱动程序。\n（2）打开Cakewalk Sonar，创建一个工程，点击左上角的编辑——参数设置（或者按下快捷键P）\n（3）左侧栏找到MIDI——设备，可以看到输入和输出都有一个“Synido TempoKEY W25”，都勾选上。然后点击右下角应用。（操作完这步，照理来说，只要加载了正常的乐器轨，按下MIDI键盘就是有声音的）\n（4）但是这步操作完后，你的键盘无法控制宿主的播放、暂停、录制等的功能，那就需要设置ACT功能，这是一个Cakewalk特有的全自定义功能，你可以使用我制作的脚本，也可以手动设置。这边我暂时只讲如何导入我设置的脚本，并且如何使用，后续我有空了再更新如何自制ACT脚本（非常简单，不会电脑都能做），让所有MIDI键盘都兼容Cakewalk。\n森林岛W25 脚本文件已上传至夸克网盘，可自取。链接：https://pan.quark.cn/s/b1bdb516ff6e\n（5）把脚本下载下来后，按照以下操作继续设置。\n（6）设置完成后，你就解锁了W25和Cakewalk Sonar搭配使用的功能。以下是功能介绍和按键对应功能图",
+   "images": [
+    {
+     "image_id": "img_Bw5QbqQN6o71pCxbKH3c",
+     "file_token": "Bw5QbqQN6o71pCxbKH3cEGvLncf",
+     "name": "image.png",
+     "local_path": "images/img_Bw5QbqQN6o71pCxbKH3c.png"
+    },
+    {
+     "image_id": "img_GgcBbDHa1oAhgRxMZyMc",
+     "file_token": "GgcBbDHa1oAhgRxMZyMcS2zSnGh",
+     "name": "image.png",
+     "local_path": "images/img_GgcBbDHa1oAhgRxMZyMc.png"
+    },
+    {
+     "image_id": "img_VprWbnjPGoIQkJxP2AEc",
+     "file_token": "VprWbnjPGoIQkJxP2AEcQsvhnwc",
+     "name": "image.png",
+     "local_path": "images/img_VprWbnjPGoIQkJxP2AEc.png"
+    },
+    {
+     "image_id": "img_PdO8bIEijoQjpZxL6V6c",
+     "file_token": "PdO8bIEijoQjpZxL6V6clwPAnPh",
+     "name": "image.png",
+     "local_path": "images/img_PdO8bIEijoQjpZxL6V6c.png"
+    },
+    {
+     "image_id": "img_ZPhmbNiWpoV0jQxQTqWc",
+     "file_token": "ZPhmbNiWpoV0jQxQTqWc6aaIn4U",
+     "name": "image.png",
+     "local_path": "images/img_ZPhmbNiWpoV0jQxQTqWc.png"
+    },
+    {
+     "image_id": "img_JJdqbMIXXogqtfxg1Qcc",
+     "file_token": "JJdqbMIXXogqtfxg1QccIQ7dned",
+     "name": "image.png",
+     "local_path": "images/img_JJdqbMIXXogqtfxg1Qcc.png"
+    }
+   ],
+   "source_locator": "Dm5RdE6MWoCtPrxMUJKcKTx1npf",
+   "source_revision": 8268,
+   "content_hash": "89d5361ce2a52805f8f4f655606ea8a9be02ffa90db2a93a2bcd0b90514439b7"
+  },
+  {
+   "id": "qa_23774db0d24d4454",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（七）连接MIDI设备相关："
+   ],
+   "category": "（七）连接MIDI设备相关：",
+   "symptom_tags": [
+    "MIDI键盘接上没声音"
+   ],
+   "title": "2、如何连接其他品牌的MIDI键盘",
+   "raw_title": "2、【MIDI键盘接上没声音】如何连接其他品牌的MIDI键盘",
+   "body": "",
+   "images": [],
+   "source_locator": "QMUDdEbgvoeBAaxres4c3oH3nFf",
+   "source_revision": 8268,
+   "content_hash": "f88d43dca500ea2fd527e52600a1b6cd5c16c61f131faadf69c49d786b902b71"
+  },
+  {
+   "id": "qa_c1a9168b91469aac",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（七）连接MIDI设备相关："
+   ],
+   "category": "（七）连接MIDI设备相关：",
+   "symptom_tags": [],
+   "title": "（先按这边操作，不懂再联系肖闻，不要问豆包，起码要用workbuddy+Cakewalk说明书做的本地知识库）",
+   "raw_title": "（先按这边操作，不懂再联系肖闻，不要问豆包，起码要用workbuddy+Cakewalk说明书做的本地知识库）",
+   "body": "（1）将MIDI键盘连接至电脑上，通过官方激活设备，并且安装必要的驱动程序。\n（2）打开Cakewalk Sonar，创建一个工程，点击左上角的编辑——参数设置（或者按下快捷键P）\n（3）左侧栏找到MIDI——设备，可以看到输入和输出都有一个你键盘的名字一般是品牌+型号，比如“Synido TempoKEY W25”。把他们都勾选上。然后点击右下角应用。（操作完这步，照理来说，只要加载了正常的乐器轨，按下MIDI键盘就是有声音的）\n（4）但是这步操作完后，你的键盘无法控制宿主的播放、暂停、录制等的功能，那就需要设置ACT功能，这是一个Cakewalk特有的全自定义功能。你需要继续在参数设置（快捷键P）中，找到MIDI——控制界面，点击右上角“+”，去添加新控制器/界面，在“控制器/界面设置”中，修改控制器/界面为ACT MIDI Controller，输入和输出端口算到你的MIDI键盘的型号，然后点击确定。\n（5）回到轨道视图，看到顶部菜单栏——工具——可以看到一个ACT MIDI Controller-1（或者-2之类的），点击进去。\n（6）打开后会看到以下界面，一般来说我们只用最下面这行（归零、停止、播放/停止、ACT enable等的这行）即可，用法就是点击一下，然后按下你键盘上的任意控制按钮（不是琴键，而是走带、翻页等的功能键，相当于就是让你自定义键盘上除了琴键以外的按键的功能），他就会映射上去，设置好你需要映射的功能后，再在左上角“预置”自定义一个预设名字，然后点击右侧的保存键即可。\n注意⚠️：最下面这行你看到全是B，或者别的字母感觉看起来难受的话，可以双击这个字母，然后修改备注，注意这只是备注，而不是功能。\n（7）再补充一下，如果说最下面一行里没有你需要的功能，比如快捷保存工程、快捷导出音频、快捷MIDI移调等等，那你就可以点击左侧的Options，进入到自定义界面，你可以设置Buttons这行里的所有按键，bank1这个选项不要动，只需要看到中间的B（也就是你给这个功能的备注），选中你已经备注好的按键（比如第一个B），然后在右侧选择你需要的功能即可绑定上。",
+   "images": [
+    {
+     "image_id": "img_WyaVbvIojoVhq2xBjL1c",
+     "file_token": "WyaVbvIojoVhq2xBjL1cAPwonSh",
+     "name": "image.png",
+     "local_path": "images/img_WyaVbvIojoVhq2xBjL1c.png"
+    },
+    {
+     "image_id": "img_TCvXbHJNioxnUlxQh3qc",
+     "file_token": "TCvXbHJNioxnUlxQh3qck1Dcn8f",
+     "name": "image.png",
+     "local_path": "images/img_TCvXbHJNioxnUlxQh3qc.png"
+    },
+    {
+     "image_id": "img_Vg24b3JH7oPqAKx3jS1c",
+     "file_token": "Vg24b3JH7oPqAKx3jS1caEKUnK7",
+     "name": "image.png",
+     "local_path": "images/img_Vg24b3JH7oPqAKx3jS1c.png"
+    },
+    {
+     "image_id": "img_MwRtbMvuyoXyZcxzJvnc",
+     "file_token": "MwRtbMvuyoXyZcxzJvncataEnwd",
+     "name": "截屏2026-05-17 22.00.41.png",
+     "local_path": "images/img_MwRtbMvuyoXyZcxzJvnc.png"
+    },
+    {
+     "image_id": "img_KqqpbJmdXovsq7xmbIHc",
+     "file_token": "KqqpbJmdXovsq7xmbIHc20dMnOb",
+     "name": "截屏2026-05-17 22.01.00.png",
+     "local_path": "images/img_KqqpbJmdXovsq7xmbIHc.png"
+    },
+    {
+     "image_id": "img_I3rEb5qnZoOhL3xdeAoc",
+     "file_token": "I3rEb5qnZoOhL3xdeAoceAPmnVb",
+     "name": "截屏2026-05-17 21.55.54.png",
+     "local_path": "images/img_I3rEb5qnZoOhL3xdeAoc.png"
+    },
+    {
+     "image_id": "img_WGnJbiOpqot4J6xOZnrc",
+     "file_token": "WGnJbiOpqot4J6xOZnrcydlNnGg",
+     "name": "截屏2026-05-18 20.17.37.png",
+     "local_path": "images/img_WGnJbiOpqot4J6xOZnrc.png"
+    },
+    {
+     "image_id": "img_JTcXbJhi2ogHW9xAUWgc",
+     "file_token": "JTcXbJhi2ogHW9xAUWgcm34unJc",
+     "name": "截屏2026-05-18 20.22.19.png",
+     "local_path": "images/img_JTcXbJhi2ogHW9xAUWgc.png"
+    }
+   ],
+   "source_locator": "ZOfKdlvLIoSogDxbn7ocEAKknBc",
+   "source_revision": 8268,
+   "content_hash": "d1e7516092454bdd4d09437b855d6fad7dda9838a757737be77d94d0fb6f544b"
+  },
+  {
+   "id": "qa_c118a0b5b6e53fd6",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（八）编曲操作相关："
+   ],
+   "category": "（八）编曲操作相关：",
+   "symptom_tags": [
+    "Clip重叠"
+   ],
+   "title": "1、复制MIDI时出现Clip/Pattern叠加怎么办？",
+   "raw_title": "1、【Clip重叠】复制MIDI时出现Clip/Pattern叠加怎么办？",
+   "body": "首先按Ctrl+Alt+V打开“选择性粘贴”功能，点开“高级”，勾选右侧的“粘贴至现有剪辑”，然后点击“确定”\n然后打开cakewalk sonar的参数设置（快捷键是英文输入法的P），划到最下面，找到图中左下角的编辑，勾选“在粘贴时使用选择性粘贴选项”，最后点击“应用”即可。这时候我们使用Ctrl+C复制，Ctrl+V粘贴就不会再出现Clip/Pattern重叠的问题了。",
+   "images": [
+    {
+     "image_id": "img_NGNubRmTjoLWp5xoXBPc",
+     "file_token": "NGNubRmTjoLWp5xoXBPc6ybSnL9",
+     "name": "截屏2026-06-28 13.20.37.png",
+     "local_path": "images/img_NGNubRmTjoLWp5xoXBPc.png"
+    },
+    {
+     "image_id": "img_GIambKFQ6ozAYoxmuLoc",
+     "file_token": "GIambKFQ6ozAYoxmuLoccnZMnrg",
+     "name": "截屏2026-06-28 13.24.45.png",
+     "local_path": "images/img_GIambKFQ6ozAYoxmuLoc.png"
+    }
+   ],
+   "source_locator": "N5Hpd2QPdoNoA9x5EJ0c7PCxnBd",
+   "source_revision": 8268,
+   "content_hash": "17c1b0b75332c13fabe0b7bf5572ed49b3c0daf5ebf662b4ebf8d550187c9967"
+  },
+  {
+   "id": "qa_778205dbce6c28b3",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（八）编曲操作相关："
+   ],
+   "category": "（八）编曲操作相关：",
+   "symptom_tags": [
+    "钢琴窗网格比例问题"
+   ],
+   "title": "2、钢琴窗的缩放比例不对，怎么调整纵向或者横向的缩放比例？",
+   "raw_title": "2、【钢琴窗网格比例问题】钢琴窗的缩放比例不对，怎么调整纵向或者横向的缩放比例？",
+   "body": "有两种方法：\n（1）纯键盘快捷键\n横向缩放（时间轴）放大：Ctrl + →，缩小：Ctrl + ←\n纵向缩放（音符高度）放大： Ctrl + ↓ ，缩小：Ctrl + ↑\n（2）纯鼠标拖动：看钢琴窗右下角，可直接拖动",
+   "images": [
+    {
+     "image_id": "img_TL3zbKWtJoH8XOxQMAEc",
+     "file_token": "TL3zbKWtJoH8XOxQMAEcP0cCngf",
+     "name": "Screenshot 2026-07-10 223239.png",
+     "local_path": "images/img_TL3zbKWtJoH8XOxQMAEc.png"
+    }
+   ],
+   "source_locator": "KVGHdOaHYoFUE1xJ52ycvgyGnYe",
+   "source_revision": 8268,
+   "content_hash": "66336a327afb93abe48c0178b7fb80321693df712e0b652524874420dd8122a0"
+  },
+  {
+   "id": "qa_814ae4a819459453",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（八）编曲操作相关："
+   ],
+   "category": "（八）编曲操作相关：",
+   "symptom_tags": [
+    "钢琴窗出现细竖线问题"
+   ],
+   "title": "3、钢琴窗上莫名出现一些竖线怎么回事？",
+   "raw_title": "3、【钢琴窗出现细竖线问题】钢琴窗上莫名出现一些竖线怎么回事？",
+   "body": "常见于点错把MIDI力度值显示到背景上了，只需要再次点击钢琴窗左下角的这个图标即可恢复",
+   "images": [
+    {
+     "image_id": "img_EeBdbKMPCoOfvOx1vjNc",
+     "file_token": "EeBdbKMPCoOfvOx1vjNcmq3VnRh",
+     "name": "Screenshot 2026-07-10 222654.png",
+     "local_path": "images/img_EeBdbKMPCoOfvOx1vjNc.png"
+    }
+   ],
+   "source_locator": "DWusdkBswo1cgYx1OkvclG3dnyc",
+   "source_revision": 8268,
+   "content_hash": "b6abfa4f19cb18c71179c87a2069c66f630ebcf735ede8d703499109638e968b"
+  },
+  {
+   "id": "qa_83aa9456bfbaf464",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（八）编曲操作相关："
+   ],
+   "category": "（八）编曲操作相关：",
+   "symptom_tags": [
+    "轨道没网格"
+   ],
+   "title": "4、看不到轨道网格怎么办？",
+   "raw_title": "4、【轨道没网格】看不到轨道网格怎么办？",
+   "body": "首先确定你要开哪个网格？\n（1）速度轨（如果你是新手，直接看下一条）：红框内任意空白处，鼠标右键点击一下\n勾选我圈起来的这个“显示网格线”，这时你的速度轨就会有网格线了\n（2）音频轨、乐器轨等（用于编曲写音符、录音的轨道）：如果不会建轨道，那就在红框内任意空白处，鼠标右键点击一下\n然后按需选择需要的轨道类型，\n音频轨是 录音/放音频文件 用的，前提是你有麦克风或者吉他效果器用于录“音频”或者准备混音\n乐器是指乐器轨，加载音源编曲用的，没什么多的需要介绍，我的视频里反复介绍过了\n加载轨道后，按图中位置依次点击1-4，直到勾选了“在剪辑前面”，即可打开轨道的网格",
+   "images": [
+    {
+     "image_id": "img_KVFRbPldWoazYuxBShcc",
+     "file_token": "KVFRbPldWoazYuxBShccWqfsnGf",
+     "name": "截屏2026-07-27 19.03.08.png",
+     "local_path": "images/img_KVFRbPldWoazYuxBShcc.png"
+    },
+    {
+     "image_id": "img_C9Q8bOUDsoZg3ZxCVjZc",
+     "file_token": "C9Q8bOUDsoZg3ZxCVjZcJaFTnYD",
+     "name": "截屏2026-07-27 19.05.23.png",
+     "local_path": "images/img_C9Q8bOUDsoZg3ZxCVjZc.png"
+    },
+    {
+     "image_id": "img_E0web4vE0oRwrHxPZuDc",
+     "file_token": "E0web4vE0oRwrHxPZuDcDlP6n0e",
+     "name": "截屏2026-07-27 19.06.16.png",
+     "local_path": "images/img_E0web4vE0oRwrHxPZuDc.png"
+    },
+    {
+     "image_id": "img_LzP2b61svoiVLExkAWbc",
+     "file_token": "LzP2b61svoiVLExkAWbc4mWKncf",
+     "name": "截屏2026-07-27 19.08.16.png",
+     "local_path": "images/img_LzP2b61svoiVLExkAWbc.png"
+    },
+    {
+     "image_id": "img_YRWUb4uK4oiX9AxPHRJc",
+     "file_token": "YRWUb4uK4oiX9AxPHRJcE4eOnPf",
+     "name": "截屏2026-07-27 19.08.36.png",
+     "local_path": "images/img_YRWUb4uK4oiX9AxPHRJc.png"
+    },
+    {
+     "image_id": "img_PtFnbMEiJo0cn7x27aac",
+     "file_token": "PtFnbMEiJo0cn7x27aacp1yinDb",
+     "name": "截屏2026-07-27 19.14.22.png",
+     "local_path": "images/img_PtFnbMEiJo0cn7x27aac.png"
+    }
+   ],
+   "source_locator": "ZpOTdzsyAoVzGwxkDLucjQNsnxc",
+   "source_revision": 8268,
+   "content_hash": "b3e9ba5b8132de3c22515a455134e53fcdbb8af5bb26b63122ba9ff2d1fb6951"
+  },
+  {
+   "id": "qa_d98a248bbfbde514",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（八）编曲操作相关："
+   ],
+   "category": "（八）编曲操作相关：",
+   "symptom_tags": [
+    "轨道网格太密/太疏了"
+   ],
+   "title": "5、轨道网格看起来和视频里不一样怎么办？",
+   "raw_title": "5、【轨道网格太密/太疏了】轨道网格看起来和视频里不一样怎么办？",
+   "body": "在控制栏（快捷键C是用于展开/隐藏控制栏的），右键图中位置1，选择位置2的16分音符或者8分音符，这时你的网格就是最常用的状态\n如果还是太密了，使用Alt+鼠标滚轮进行横向缩放，你把界面缩到太小了，放大一下就可以",
+   "images": [
+    {
+     "image_id": "img_XNlebIA9oo7pTKxWqrEc",
+     "file_token": "XNlebIA9oo7pTKxWqrEcw1eCnOb",
+     "name": "截屏2026-07-27 19.17.57.png",
+     "local_path": "images/img_XNlebIA9oo7pTKxWqrEc.png"
+    }
+   ],
+   "source_locator": "Q0radajWJoB9YXxoBiOcqDGhnVf",
+   "source_revision": 8268,
+   "content_hash": "4780b5a3a00e54fa2f8aa9d5c6e23845d460392372718f725158b3d646f12ef5"
+  },
+  {
+   "id": "qa_a694d2dcaf905572",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（八）编曲操作相关："
+   ],
+   "category": "（八）编曲操作相关：",
+   "symptom_tags": [
+    "找不到自己的音源怎么办"
+   ],
+   "title": "6、自带太多的Bandlab音源，找不到自己的音源怎么办？",
+   "raw_title": "6、【找不到自己的音源怎么办】自带太多的Bandlab音源，找不到自己的音源怎么办？",
+   "body": "看到右侧的“文件浏览器”（参考图1），依次选中Plugins——instruments（参考图2），然后按照图3使用鼠标右键点击，取消勾选“显示Bandlab插件”\n完成以上操作后，Bandlab的所有音源会收纳到一个叫“Bandlab instrument”里。之后我们就在图4这个位置的搜索框中，搜索你需要的音源，比如 Kontakt 或者 Bandlab instrument等等你安装过的音源了\n找到音色后，鼠标左键双击音色名就能加载，如果有弹窗，请按照图5来设置（取消勾选“启用MIDI输出”，再点确定）",
+   "images": [
+    {
+     "image_id": "img_KYMIbCZbzoOUIHxNGApc",
+     "file_token": "KYMIbCZbzoOUIHxNGApciOEknCh",
+     "name": "截屏2026-08-03 21.48.41.png",
+     "local_path": "images/img_KYMIbCZbzoOUIHxNGApc.png"
+    },
+    {
+     "image_id": "img_S0h5bNVBFoiiwaxOt2Nc",
+     "file_token": "S0h5bNVBFoiiwaxOt2NcUsy6nKh",
+     "name": "截屏2026-08-03 21.49.32.png",
+     "local_path": "images/img_S0h5bNVBFoiiwaxOt2Nc.png"
+    },
+    {
+     "image_id": "img_U24NbjHSro4cypxCJZsc",
+     "file_token": "U24NbjHSro4cypxCJZscgmjRn7f",
+     "name": "截屏2026-08-03 21.50.42.png",
+     "local_path": "images/img_U24NbjHSro4cypxCJZsc.png"
+    },
+    {
+     "image_id": "img_DjNAboGxUorSqYxsTk5c",
+     "file_token": "DjNAboGxUorSqYxsTk5c5WUhnBh",
+     "name": "截屏2026-08-04 12.38.41.png",
+     "local_path": "images/img_DjNAboGxUorSqYxsTk5c.png"
+    },
+    {
+     "image_id": "img_A2c5buW4GoaWMDxy1ZVc",
+     "file_token": "A2c5buW4GoaWMDxy1ZVcCndOnBh",
+     "name": "截屏2026-08-03 21.53.36.png",
+     "local_path": "images/img_A2c5buW4GoaWMDxy1ZVc.png"
+    }
+   ],
+   "source_locator": "DYxqdYitLoIpQpxMRNRcWF5CnWf",
+   "source_revision": 8268,
+   "content_hash": "86e84f060242ff4d9f143b291cc126993332d0f1d98cf242c0ce6866610fa8d0"
+  },
+  {
+   "id": "qa_5f97fc0f60ac5286",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（九）轨道视图相关："
+   ],
+   "category": "（九）轨道视图相关：",
+   "symptom_tags": [
+    "轨道界面和视频里不一样"
+   ],
+   "title": "1、我的轨道视图界面怎么没有创建轨道的地方？",
+   "raw_title": "1、【轨道界面和视频里不一样】我的轨道视图界面怎么没有创建轨道的地方？",
+   "body": "从图片中可以看到轨道视图的“视频轨”被展开了，我们在一般的编曲混音的时候用不到这个，除非是影视类的编曲混音才会用上。\n这边需要进行科普，下图是我把轨道视图中的所有轨道类型展开的样子，我们可以通过拖动红圈的横线来展开/收起这个轨道。\n自上而下分别是\n1：编曲轨（一般不使用，建议收起来，用于添加标记，注意这个不是用来编曲的轨道，这个是翻译问题）\n2：速度轨（一般不使用，建议收起来，用于改变乐器演奏BPM的轨道）\n3：视频轨（一般不使用，建议收起来，影视配乐相关工作时，用于放置视频文件）\n4：单轨音轨（建议展开到最大！这才是我们编录混用的，可加载音频轨、乐器轨、辅助音轨等最主要的轨道类型。）\n5：总线音轨（使用率不高，如果你要经常做总线的跳线，又不想打开混音台，那可以适当把这个拉大，如果你不知道什么是总线，那就说明你用不上，建议收起来）\n在按照使用频率的建议调整后，就是下图这样子，现在就可以正常开始编曲、录音、混音啦！",
+   "images": [
+    {
+     "image_id": "img_OzxhbyVeyoefEPxlWmGc",
+     "file_token": "OzxhbyVeyoefEPxlWmGc6sYznge",
+     "name": "b6c307cb9f214cbd92e6f5a939c7db37.jpg",
+     "local_path": "images/img_OzxhbyVeyoefEPxlWmGc.jpg"
+    },
+    {
+     "image_id": "img_XzI3bk7hoo1oiFxm6xtc",
+     "file_token": "XzI3bk7hoo1oiFxm6xtcSgSvnfe",
+     "name": "截屏2026-07-11 20.32.23.png",
+     "local_path": "images/img_XzI3bk7hoo1oiFxm6xtc.png"
+    },
+    {
+     "image_id": "img_XmlabGRxgo8ZuyxQe8Xc",
+     "file_token": "XmlabGRxgo8ZuyxQe8XcrKqvncb",
+     "name": "截屏2026-07-11 20.43.38.png",
+     "local_path": "images/img_XmlabGRxgo8ZuyxQe8Xc.png"
+    }
+   ],
+   "source_locator": "YbUFdRctioL6KKxwdlVcvhTenQh",
+   "source_revision": 8268,
+   "content_hash": "9d3ca1217971f4d3aa8c12d0149ee58273b7f8cdc63e307937bb514b10294e87"
+  },
+  {
+   "id": "qa_010c7c50d8aec9a8",
+   "section_path": [
+    "一、Cakewalk Sonar相关问答汇总",
+    "（九）轨道视图相关："
+   ],
+   "category": "（九）轨道视图相关：",
+   "symptom_tags": [
+    "不会建轨道"
+   ],
+   "title": "2、我不会建轨道怎么办",
+   "raw_title": "2、【不会建轨道】我不会建轨道怎么办",
+   "body": "...心累了，毁灭吧，这个我在无数个视频里都反复提了，如果这个视频看不明白，我认为应该是学习能力的问题\n关于Cakewalk轨道的讲解视频    https://www.bilibili.com/video/BV1soWfzQEfA",
+   "images": [],
+   "source_locator": "AJBvdgh3PolnkOxwMAlcWSTUnpf",
+   "source_revision": 8268,
+   "content_hash": "0eae3e452a8c6628896f4975b9ee758f9541c59e4cc98f9ca938de2e4e923da9"
+  },
+  {
+   "id": "qa_633784c430d2dc00",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（一）Native Instruments （NI）相关"
+   ],
+   "category": "（一）Native Instruments （NI）相关",
+   "symptom_tags": [
+    "NI下载器报错解决方法一"
+   ],
+   "title": "1、Native Access打开后报错“Please grant permission to Native Access to install dependencies. Please restart Native Access and try again.”",
+   "raw_title": "1、【NI下载器报错解决方法一】Native Access打开后报错“Please grant permission to Native Access to install dependencies. Please restart Native Access and try again.”",
+   "body": "A：Win和Mac处理方式不同（Mac很少出问题），大家按照自己的系统进行操作\nWindows:\n（1）首先确保Native access已经默认路径安装，再打开文件资源管理器\n（2）找到这个路径 C:\\Program Files\\Native Instruments\\Native Access\\resources\\daemon\\win\n（3）安装“NTKDaemon 1.28.0 Setup PC”（这个文件会随你安装的Native Access版本更新的，大家安装最新版本即可）这个文件即可\n如果找不到这个文件的话，可以在官网下载安装 https://support.native-instruments.com/hc/zh-cn/articles/13712583860125-Native-Access-%E9%94%99%E8%AF%AF%E4%BF%A1%E6%81%AF-%E8%AF%B7%E6%8E%88%E4%BA%88-Native-Access-%E5%AE%89%E8%A3%85%E6%89%80%E9%9C%80%E6%9C%8D%E5%8A%A1%E7%9A%84%E6%9D%83%E9%99%90-Please-grant-permission-to-Native-Access-to-install-dependencies\n（4）安装完成后，重新启动Native Access即可\nmacOS:\n（1）重启电脑。\n（2）打开活动监视器，停止NTKDaemon和Native Access Helper的相关进程\n（3）删除指定的plist文件和文件夹。\n• Macintosh HD > Library > LaunchDaemons > com.native-instruments.NativeAccess.Helper2.plist\n• Macintosh HD > Library > PrivilegedHelperTools > com.native-instruments.NativeAccess.Helper2\n• Macintosh HD > Users > 您的用户名 > Library > Preferences > com.native-instruments.Native Instruments.plist\n• Macintosh HD > Users > 您的用户名 > Library > Preferences > com.native-instruments.NTKDaemon.plist\n• Macintosh HD > Users > 您的用户名 > Library > Application Support > Native Instruments > NTK (文件夹)\n• Macintosh HD > Users > 您的用户名 > Library > Application Support > Native Instruments > Native Access (文件夹)\n• 注意：用户库（User Library）文件夹是隐藏的。 要访问它，请单击菜单栏中的 Go 并按下 Alt 键。 您现在将在菜单中找到 库（Library）条目。\n（4）清空废纸篓\n（5）按照以下步骤重新安装NTKDaemon\n（6）通过终端启用Native Access Helper。\n首先从以下位置打开 Terminal：Applications > Utilities > Terminal.app\n然后复制以下命令行，将其粘贴到 Terminal 并按 Enter：\nsudo launchctl enable system/com.native-instruments.NativeAccess.Helper2\n（7）启动Native Access。",
+   "images": [
+    {
+     "image_id": "img_AmN9bFcjsoS5qdxdVUZc",
+     "file_token": "AmN9bFcjsoS5qdxdVUZcggBHnbb",
+     "name": "截屏2026-02-20 11.32.12.png",
+     "local_path": "images/img_AmN9bFcjsoS5qdxdVUZc.png"
+    },
+    {
+     "image_id": "img_VbH3bUs3voydUxxKuYZc",
+     "file_token": "VbH3bUs3voydUxxKuYZcB1odnnd",
+     "name": "截屏2026-02-20 11.40.30.png",
+     "local_path": "images/img_VbH3bUs3voydUxxKuYZc.png"
+    }
+   ],
+   "source_locator": "JWiAd6i6ToBks4xVD1OcnsqInCe",
+   "source_revision": 8268,
+   "content_hash": "d26645cfea815d27459e5ca6d08e3a318c8beef7d0ce03ada4fdd2c3690777ec"
+  },
+  {
+   "id": "qa_a7c31d781b45dd1f",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（一）Native Instruments （NI）相关"
+   ],
+   "category": "（一）Native Instruments （NI）相关",
+   "symptom_tags": [
+    "NI下载器报错解决方法二"
+   ],
+   "title": "2、Native Access打开后报错“Please grant permission to Native Access to install dependencies. Please restart Native Access and try again.”用以上方法修复后，仍然打不开。",
+   "raw_title": "2、【NI下载器报错解决方法二】Native Access打开后报错“Please grant permission to Native Access to install dependencies. Please restart Native Access and try again.”用以上方法修复后，仍然打不开。",
+   "body": "A：这种情况非常少见，基本是电脑设置以及网络的问题，我们需要进一步排查问题\n首先我们需要排查网路问题，比如开启VPN看看能不能解决，\n然后可能是软件权限不足，可以在使用工具修复后，再使用管理员身份运行Native Access。\n如果还是不行，就只能采取Native Access降级的方法，也就是安装旧版本的Native Access（蓝白版本）\n（1）关闭Native Access\n（2）下载并且安装旧版本（蓝白版本）Native Access 1代  pan.quark.cn/s/c8f714d60f42\n（3）打开蓝白版本的Native Access即可登录下载\n需要注意一点，旧版本的Native Access上面可能不会显示izotope的插件，所以如果你在使用的旧版本的Native Access时，需要下载izotope的插件的话，比如Ozone、RX等的插件，就可能需要使用 iZotope Product Portal 登录安装（原则上可以直接使用你的NI账户登录）。iZotope Product Portal的安装包在这 pan.quark.cn/s/ca2f8a3af75b",
+   "images": [],
+   "source_locator": "LOOzd4lHmoiSYPxtin8c63rsnYc",
+   "source_revision": 8268,
+   "content_hash": "75cab73149d2fc4a7f7f14b448477b56313d05766668c8069e6fe36ddaccb8d5"
+  },
+  {
+   "id": "qa_cb4dda83bcb26477",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（一）Native Instruments （NI）相关"
+   ],
+   "category": "（一）Native Instruments （NI）相关",
+   "symptom_tags": [
+    "旧版本Native Access使用教程"
+   ],
+   "title": "3、在降级到Native Access 1之后不会用这个软件怎么办？",
+   "raw_title": "3、【旧版本Native Access使用教程】在降级到Native Access 1之后不会用这个软件怎么办？",
+   "body": "A：Native Access1实际和Native Access2用法完全一样，不过我还是需要提醒一下，做音乐常备手机拍照翻译软件，比如微信扫一扫里的拍照翻译、百度翻译的拍照翻译功能等等，在遇到看不懂的英文时，优先使用软件翻译看一看什么意思。\n登录进去后，我们讲下几个在视频中提到的Native Access2相关的功能，对应在Native Access1里都在哪里。\n（1）左上角“Add a serial”是用来输入你领取到的其他基于Kontakt的音源的序列号\n（2）左侧“Not installed”是你账号里拥有的、但是还没安装的插件\n（3）右上角半身像的图标点开，选“Preferences”，就可以看到图二这个修改安装路径的地方，这边我们只把第三个“Content Location”改成我们提前新建的Library文件夹，路径中一定不能出现中文，必须全英文字母或者带数字。",
+   "images": [
+    {
+     "image_id": "img_RsmhbjjbpoEGtkxYm8mc",
+     "file_token": "RsmhbjjbpoEGtkxYm8mcaZs3nSc",
+     "name": "截屏2026-02-20 14.40.48.png",
+     "local_path": "images/img_RsmhbjjbpoEGtkxYm8mc.png"
+    },
+    {
+     "image_id": "img_IeOmbWrYMognYlxx8nHc",
+     "file_token": "IeOmbWrYMognYlxx8nHcZBGSnfh",
+     "name": "截屏2026-02-20 14.40.04.png",
+     "local_path": "images/img_IeOmbWrYMognYlxx8nHc.png"
+    },
+    {
+     "image_id": "img_JVHAbKYyao9G1Xxthz1c",
+     "file_token": "JVHAbKYyao9G1Xxthz1cBSS0nGe",
+     "name": "截屏2026-02-20 14.44.35.png",
+     "local_path": "images/img_JVHAbKYyao9G1Xxthz1c.png"
+    }
+   ],
+   "source_locator": "VsSvd4IS7oN9F3xx9MJcn7qEnUb",
+   "source_revision": 8268,
+   "content_hash": "79901e2fc18eb57bb60f9a8a93a1426ecccffcc254eb39428c1362e0272b79e8"
+  },
+  {
+   "id": "qa_8e44ac3c3a39bc27",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（一）Native Instruments （NI）相关"
+   ],
+   "category": "（一）Native Instruments （NI）相关",
+   "symptom_tags": [
+    "下载器里的插件数不足22个"
+   ],
+   "title": "4、下载器的Library里为什么只显示3个插件，和视频里的不一样？",
+   "raw_title": "4、【下载器里的插件数不足22个】下载器的Library里为什么只显示3个插件，和视频里的不一样？",
+   "body": "（1）首先先确保电脑系统为最新的Win10版本或者较新的Win11版本，如果是老版本建议先更新一下系统。\n（2）然后在官网重新领取Komplete Start，领取完成后，安装最新版本的Native Access，再进入Native Access进行手动刷新，可以在右上角找到刷新按钮。\n（3）如果还不行，就需要重置 Native Access 的 XML 文件：\n• 退出 Native Access 以及所有其他应用程序。\n• 在电脑上打开以下位置：\nC: > Program Files > Common Files > Native Instruments > Service Center\n• 仅删除 Service Center 文件夹中名为 NativeAccess.xml 的文件。\n• 启动 Native Access，然后点击刷新按钮 。\n• 扫描完成后，您账户中的所有产品应会再次显示。\n• 如果还是缺少某个插件，那可能那个插件是老款，默认隐藏了，可以点开这个“Show Legacy Versions”滑块来显示",
+   "images": [
+    {
+     "image_id": "img_JcKFbBThOoeUSXxGejQc",
+     "file_token": "JcKFbBThOoeUSXxGejQcWrPUn6b",
+     "name": "截屏2026-08-13 14.08.13.png",
+     "local_path": "images/img_JcKFbBThOoeUSXxGejQc.png"
+    },
+    {
+     "image_id": "img_Bgr4bVrqtosvaOxMUMPc",
+     "file_token": "Bgr4bVrqtosvaOxMUMPc3NyGn6l",
+     "name": "截屏2026-08-13 14.13.24.png",
+     "local_path": "images/img_Bgr4bVrqtosvaOxMUMPc.png"
+    }
+   ],
+   "source_locator": "ZY9hdEdZDoBxBzxZYpUcTqwundc",
+   "source_revision": 8268,
+   "content_hash": "3814ef141bf88a95c2c734393a218c4a637626e22927bceae4173ffcd401e92d"
+  },
+  {
+   "id": "qa_5c079f7a33a1898f",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（二）Ample相关"
+   ],
+   "category": "（二）Ample相关",
+   "symptom_tags": [
+    "Ample音源扫描不到"
+   ],
+   "title": "1、Ample的免费音源（AGML、ABP等）安装后扫描不到怎么办？",
+   "raw_title": "1、【Ample音源扫描不到】Ample的免费音源（AGML、ABP等）安装后扫描不到怎么办？",
+   "body": "（1）需要打开参数设置（快捷键P），点开左侧的VST设置\n（2）点击右边VST扫描路径下面的“添加”\n（3）找到路径 C:\\Program Files\\Steinberg\\VSTPlugins  并添加\n（4）添加完成后状态如以上图片所示\n（5）点击右下方应用，再点击扫描选项下方的“扫描”，等待扫描完成。\n现在你就可以加载这个音源了",
+   "images": [
+    {
+     "image_id": "img_HO6BbU94yocv8nxBcdwc",
+     "file_token": "HO6BbU94yocv8nxBcdwc9hQEn5d",
+     "name": "r6jaqWow.png",
+     "local_path": "images/img_HO6BbU94yocv8nxBcdwc.png"
+    }
+   ],
+   "source_locator": "XvJDdotzEoGlDaxF8ihcMliTnIc",
+   "source_revision": 8268,
+   "content_hash": "992c5944e4d467d7bbed2c117b9a08816b4e8339eccd0979848576f92bbb3898"
+  },
+  {
+   "id": "qa_ac980402c631cc97",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（三）Bandlab相关"
+   ],
+   "category": "（三）Bandlab相关",
+   "symptom_tags": [
+    "自带音源很乱怎么办"
+   ],
+   "title": "1、26年4月后Cakewalk多出了很多插件（音源和效果器），怎么隐藏？",
+   "raw_title": "1、【自带音源很乱怎么办】26年4月后Cakewalk多出了很多插件（音源和效果器），怎么隐藏？",
+   "body": "（1）音源方面，在加载音源的时候选择“插件布局”——取消勾选“显示Bandlab插件”\n取消勾选后，Cakewalk26.4版本的Bandlab音色会自动整合Bandlab instruments这个音源中,这样子就不用担心因为Bandlab音色太多，而找不到自己装的音源了。\n（2）效果器方面，在混音控制台的任意通道或者轨道视图中的任意轨道头的FX插入处，加载效果器的时候选择“插件布局”——取消勾选“显示Bandlab插件”即可",
+   "images": [
+    {
+     "image_id": "img_ZzukbpjRiolUrbx62tCc",
+     "file_token": "ZzukbpjRiolUrbx62tCcFuQfnRh",
+     "name": "截屏2026-06-23 00.26.24.png",
+     "local_path": "images/img_ZzukbpjRiolUrbx62tCc.png"
+    },
+    {
+     "image_id": "img_F9gwbZb63oDyTFxFoV8c",
+     "file_token": "F9gwbZb63oDyTFxFoV8czxF6nCf",
+     "name": "截屏2026-06-23 00.29.34.png",
+     "local_path": "images/img_F9gwbZb63oDyTFxFoV8c.png"
+    },
+    {
+     "image_id": "img_Z0OYbNTHAosjWdxjYIuc",
+     "file_token": "Z0OYbNTHAosjWdxjYIucSVjlnBd",
+     "name": "截屏2026-07-03 22.13.05.png",
+     "local_path": "images/img_Z0OYbNTHAosjWdxjYIuc.png"
+    }
+   ],
+   "source_locator": "Fekwdg04lozBdexIV2ecznn8neA",
+   "source_revision": 8268,
+   "content_hash": "ce0b56acce04c0d458e6f08ef5d796b414104c13ec399814799a28b08f915079"
+  },
+  {
+   "id": "qa_4951ef4ccf2663ac",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（四）Strezov  Sampling相关"
+   ],
+   "category": "（四）Strezov  Sampling相关",
+   "symptom_tags": [
+    "注册卡住怎么办"
+   ],
+   "title": "1、注册账号时卡在最后一步，无法继续怎么回事？",
+   "raw_title": "1、【注册卡住怎么办】注册账号时卡在最后一步，无法继续怎么回事？",
+   "body": "图片中这个是人机验证没显示或者未通过的问题，部分人是直接卡这也不弹红框\n这两种情况的原因是一样的，所以都可以用以下方法处理\n首先安装一个Steam++（也叫Watttoolkit）\n可以从这边直接下载（exe是Windows用的，dmg是Mac用的）\nhttps://pan.quark.cn/s/b4a0590bd2b6\n也可以在官网下载（都是一样的）\nhttps://steampp.net/\n安装后打开，左侧选择“网络加速”，往下翻找到“国外验证码平台”\n最后点击“一键加速”即可\n现在再回到注册界面，应该就可以继续下一步了",
+   "images": [
+    {
+     "image_id": "img_KdzYbKfyVooALOx66M9c",
+     "file_token": "KdzYbKfyVooALOx66M9cDZl4nye",
+     "name": "截屏2026-07-11 00.57.54.png",
+     "local_path": "images/img_KdzYbKfyVooALOx66M9c.png"
+    },
+    {
+     "image_id": "img_TqKnbrFDgoFWrXxPjFuc",
+     "file_token": "TqKnbrFDgoFWrXxPjFucKgTNnNb",
+     "name": "截屏2026-08-10 00.08.52.png",
+     "local_path": "images/img_TqKnbrFDgoFWrXxPjFuc.png"
+    }
+   ],
+   "source_locator": "KMrrdNI8Eo8fWyxxqu1c6viNnSd",
+   "source_revision": 8268,
+   "content_hash": "b906651055331482dbf0729166c23a4b8b26d43cd2f9ea06ad6c68bafc5cff41"
+  },
+  {
+   "id": "qa_1c98b308ccfd7fa2",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（五）柏林管弦音源/Sine Player相关"
+   ],
+   "category": "（五）柏林管弦音源/Sine Player相关",
+   "symptom_tags": [
+    "显示空白/没显示许可证"
+   ],
+   "title": "1、柏林自由管弦乐团的许可证并未在 SINE Player 中显示",
+   "raw_title": "1、【显示空白/没显示许可证】柏林自由管弦乐团的许可证并未在 SINE Player 中显示",
+   "body": "已与官方确认解决方案\n如果是Store与My Licenses均显示为灰色，一般重启电脑即可解决此问题。\n如果重启也不行，找到以下路径 C:\\Users\\<用户名>\\AppData\\Local\\Orchestral Tools\\SINE Player\n删除其中的Sync.json文件，然后重启DAW即可解决",
+   "images": [
+    {
+     "image_id": "img_HdrXbhtxUorXSFx7HmWc",
+     "file_token": "HdrXbhtxUorXSFx7HmWcalugnkf",
+     "name": "截屏2026-07-15 21.37.41.png",
+     "local_path": "images/img_HdrXbhtxUorXSFx7HmWc.png"
+    }
+   ],
+   "source_locator": "Rqzmd3EA6omK1uxmq9Rc8SuynMc",
+   "source_revision": 8268,
+   "content_hash": "f6e6e128820bc9e00b100ede85a0a5015ab41895987d4fb9c67ee4611effd91b"
+  },
+  {
+   "id": "qa_e0cabb56455c9209",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（五）柏林管弦音源/Sine Player相关"
+   ],
+   "category": "（五）柏林管弦音源/Sine Player相关",
+   "symptom_tags": [
+    "下载失败/无限循环下载"
+   ],
+   "title": "2、要么完全下载不动，要么在进度条读满后又归零",
+   "raw_title": "2、【下载失败/无限循环下载】要么完全下载不动，要么在进度条读满后又归零",
+   "body": "已与官方确认解决方案\n如果下载失败，可以尝试下载到其他硬盘。\n注意，下载的时候必须保持在非常稳定的网络环境下进行，下载过程中绝对不能切换网络。",
+   "images": [
+    {
+     "image_id": "img_O0jfbnQfkoArbExsRPnc",
+     "file_token": "O0jfbnQfkoArbExsRPncxxhln4e",
+     "name": "截屏2026-07-15 21.39.18.png",
+     "local_path": "images/img_O0jfbnQfkoArbExsRPnc.png"
+    }
+   ],
+   "source_locator": "SG4od5ZsToTKqfxfCMccxOVFnEg",
+   "source_revision": 8268,
+   "content_hash": "39099a98b95d8810efd41b5d974fcf947d6fc614a781fde3387ed6ffb1121073"
+  },
+  {
+   "id": "qa_5d981ef2ab71706e",
+   "section_path": [
+    "二、其他音源相关问答汇总",
+    "（五）柏林管弦音源/Sine Player相关"
+   ],
+   "category": "（五）柏林管弦音源/Sine Player相关",
+   "symptom_tags": [
+    "扫描不到Sine player/加载报错"
+   ],
+   "title": "3、 DAW中扫描不到这个音源，即便插件已经放到默认的VST3路径里，也扫不到。即使扫到了也会出现以下报错。",
+   "raw_title": "3、【扫描不到Sine player/加载报错】 DAW中扫描不到这个音源，即便插件已经放到默认的VST3路径里，也扫不到。即使扫到了也会出现以下报错。",
+   "body": "已与官方确认解决方案，2步\n1、首先确认安装的时候没有更改VST3的安装路径，并且在DAW的扫描路径中再添加一条这个音源的VST3保存路径。即使宿主自带了这个默认VST3路径，也需要再手动添加一条\n2、如果还不行的话，就用Windows的卸载程序把Sine player完全卸载（不要只把快捷方式拖到回收站，或者只删除VST3文件），然后重新安装到其他的纯英文路径中（包括VST3），然后在DAW中再添加一条这个新的VST3安装路径，再进行扫描即可解决",
+   "images": [
+    {
+     "image_id": "img_L2f1bqnrXonnrSxhV5pc",
+     "file_token": "L2f1bqnrXonnrSxhV5pc3Um9nVe",
+     "name": "截屏2026-07-15 21.36.31.png",
+     "local_path": "images/img_L2f1bqnrXonnrSxhV5pc.png"
+    }
+   ],
+   "source_locator": "Me2bdcmGXoX82Oxcdp2cSelKnxg",
+   "source_revision": 8268,
+   "content_hash": "107145b92c27a1bef54a575c5d8ebf21233133f255eebf405f87ea3200c20077"
+  }
+ ],
+ "source": "fixture(r8268)"
+}

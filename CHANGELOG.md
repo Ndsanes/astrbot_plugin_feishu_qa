@@ -1,6 +1,24 @@
 # 更新日志
 
-本文件供 AstrBot 面板「插件更新日志」读取(`CHANGELOG.md`)。每次发版前更新对应条目。
+## v0.3.0 (2026-08-24)
+
+### 变更
+
+- **lark-cli 收口为飞书网关**:删除插件自管的 lark-cli 子进程调用、vendored
+  二进制自举与 `FEISHU_APP_ID`/`FEISHU_APP_SECRET` 播种逻辑;文档抓取、图片
+  下载、设备授权(start/finish)、登录态查询、`/learn` 写回全部改走
+  `lark_cli` 平台适配器(astrbot_plugin_lark_cli_platform)的网关公开方法。
+  认证、登录态、TAT 刷新与限速由网关统一负责。
+- 新增 `adapter/gateway.py`:`GatewayClient` 薄客户端,构造时注入网关解析器
+  (每次操作前重新解析,适配器晚启动自动恢复);网关未就绪时 WARNING 降级,
+  本地语料继续服务,不崩溃。
+- 授权提醒改为经网关 `send_text` 以 bot 身份私聊推送授权链接(原交互式卡片
+  通道随 lark-cli 直连一并移除)。
+- 依赖 `astrbot-lark-kit` 升至 v0.2.2(仅作纯逻辑库:auth 状态解析/健康判定,
+  无子进程);打包脚本不再携带 lark-cli 二进制。
+- 已知限制:网关 `fetch_doc` 只返回正文文本,同步的 revision 以 -1 占位,
+  "未变化"判定退化为内容 diff(功能等价)。
+- 依赖 `astrbot-lark-kit` 已发版为独立包(v0.1.0),正式安装走 git URL;开发模式仍以工作区源码优先,vendored 副本兜底。
 
 ## v0.2.0 (2026-08-24)
 

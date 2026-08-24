@@ -5,7 +5,7 @@
 ## 架构
 
 ```
-飞书 wiki ──lark-cli──▶ LarkAdapter(含 auth 健康监控)
+飞书 wiki ──lark_cli 平台网关──▶ GatewayClient(含 auth 健康监控)
                             │
                        QaCorpus(条目↔截图稳定绑定)
                             │
@@ -15,11 +15,15 @@
     高置信→直答+合并转发图片      低置信→search_feishu_qa 工具受限作答
 ```
 
+飞书访问(文档抓取/图片下载/授权/写回)全部转发给 `lark_cli` 平台适配器
+(astrbot_plugin_lark_cli_platform)暴露的网关对象;本插件不自管 lark-cli、
+不持有凭据。网关未就绪时自动降级:本地语料继续服务,飞书拉取/授权暂不可用。
+
 ## 安装
 
 1. 将本目录放入 AstrBot `data/plugins/`
 2. 安装共享依赖:`pip install -e ../astrbot_lark_kit`(或等发布后从 git 安装)
-3. 部署机需安装并登录 [lark-cli](https://github.com/) 用户身份:`lark-cli auth login`
+3. 部署并启用 `lark_cli` 平台适配器(astrbot_plugin_lark_cli_platform),完成登录
 4. WebUI 配置:`WIKI_URL` + `ENABLED_GROUPS`(留空不启用任何群)
 
 ## 使用

@@ -1,5 +1,6 @@
-# 运行时依赖:astrbot_lark_kit 已发版为独立包,正式安装走 git URL。
+# 运行时依赖:astrbot_lark_kit 仅作为纯逻辑库使用(auth 状态解析与健康判定),
+# 不再包含任何 lark-cli 子进程调用;飞书访问全部经 lark_cli 平台网关转发。
 # 开发模式:工作区根目录的 astrbot_lark_kit/ 源码优先(pytest pythonpath=["."]),
 # 打包脚本仍会把源码复制为插件内 vendored 子包作为兜底,三层解析顺序:
 #   1) 开发环境 workspace 源码  2) pip 安装版  3) 插件 zip 内 vendored 副本
-astrbot-lark-kit @ git+https://github.com/Ndsanes/astrbot_lark_kit.git@v0.1.0
+astrbot-lark-kit @ git+https://github.com/Ndsanes/astrbot_lark_kit.git@v0.2.2
