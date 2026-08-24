@@ -26,7 +26,8 @@ sys.path.insert(0, str(REPO_ROOT))
 from astrbot_plugin_feishu_qa.corpus.builder import build_manifest  # noqa: E402
 from astrbot_plugin_feishu_qa.corpus.parser import parse_xml  # noqa: E402
 
-IMAGE_MARKER = "[本条目包含可按需发送的操作截图,entry_id={eid}]"
+# 短标记:语义由系统提示词里的 FAQ 引用规范解释,chunk 内只保留指针本身
+IMAGE_MARKER = "[配图 {eid}]"
 
 
 def build_chunk_content(entry: dict) -> str:
@@ -84,7 +85,7 @@ def main() -> int:
     marked = sum(
         1
         for c in payload["documents"][0]["chunks"]
-        if "entry_id=qa_" in c
+        if "[配图 qa_" in c
     )
     name = payload["documents"][0]["file_name"]
     total = len(payload["documents"][0]["chunks"])

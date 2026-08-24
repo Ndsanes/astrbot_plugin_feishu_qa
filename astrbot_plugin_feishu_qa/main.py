@@ -20,6 +20,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
 from .adapter.gateway import GatewayClient
+from .answer.direct import format_direct_answer
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
 from .corpus.parser import parse_xml
@@ -38,13 +39,16 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 
 # FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
 _FAQ_CITATION_GUIDANCE = (
-    "\n[FAQ 引用规范] 知识库结果中若存在以「【全家桶FAQ >」开头的条目且回答用到其内容,"
-    "必须在回答末尾另起一行注明出处,格式:"
+    "\n[FAQ 引用规范] 知识库结果中「【全家桶FAQ >」开头的条目是精选问答原文,"
+    "处理规则:"
+    "(1)某条目与用户问题匹配时,优先调用 qa_send_answer(entry_id=条目标记里的id)"
+    "把原文连同操作截图一次性发给用户,之后只做简短衔接或追问,不要改写/缩写/复述其正文;"
+    "(2)仅需补截图时才用 qa_entry_images;"
+    "(3)回答涉及条目内容时,末尾另起一行注明:"
     "📄 出处:《有福同享全家桶Q&A汇总》条目标题方括号里的章节路径"
     "(如 一、Cakewalk Sonar相关问答汇总 > （一）缺少内容相关);"
-    "用到多条时合并为一行列出。忽略条目末尾的 [本条目包含可按需发送的操作截图,entry_id=…] 标记,"
-    "不要把它原样输出给用户;仅当用户主动索要截图或操作步骤强依赖配图才能理解时,"
-    "才调用 qa_entry_images 工具(从对应标记取 entry_id)发送截图。"
+    "(4)正文里「参考图N」「如图」「下图」等指代依赖原始配图,不要臆测图中内容;"
+    "条目末尾 [配图 qa_xxx] 标记表示该条目有截图,不要把标记原样输出给用户。"
 )
 
 
@@ -54,7 +58,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.4.1",
+    "0.5.0",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -348,6 +352,31 @@ class FeishuQaPlugin(Star):
         # 返回 MessageEventResult:核心按 tool_direct_result 直发给用户并结束本轮
         # Agent;返回 str 则作为工具结果回传 LLM 继续。两条路径互斥,见执行器契约。
         return result
+
+    @filter.llm_tool(name="qa_send_answer")
+    async def qa_send_answer(self, event: AstrMessageEvent, entry_id: str):
+        """把与用户问题匹配的 QA 条目按文档原文(含操作截图)完整发送给用户。
+
+        当【全家桶FAQ】条目命中问题时优先使用;发送后只需简短衔接,不要复述条目内容。
+
+        Args:
+            entry_id (str): QA 条目 ID,形如 qa_xxxxxxxxxxxxxxxx,取自条目标记
+        """
+        if not re.fullmatch(r"qa_[0-9a-f]{16}", entry_id or ""):
+            return "发送失败:entry_id 格式非法"
+        entry = next((e for e in self._entries if e.id == entry_id), None)
+        if entry is None:
+            return f"发送失败:{entry_id} 不在当前语料中"
+
+        direct = format_direct_answer(
+            entry, store=self.store, max_images=int(self._cfg("MAX_IMAGES", 3))
+        )
+        await self._send_direct(event, direct)
+        n_imgs = len(direct.image_paths)
+        suffix = f"(含{n_imgs}张截图)" if n_imgs else "(纯文本)"
+        # 经 event.send 直发而非 set_result:Agent 循环保持存活,可继续多问衔接;
+        # 回执明确告知已投递原文,防止模型再复述一遍。
+        return f"已按文档原文完整发送条目《{entry.raw_title}》{suffix},请勿复述其正文。"
 
     @filter.on_llm_request()
     async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:
