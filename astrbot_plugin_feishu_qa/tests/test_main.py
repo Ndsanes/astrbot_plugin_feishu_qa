@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
@@ -116,129 +115,6 @@ class TestGroupWakeListener:
         assert not event.sent and not event.is_stopped(), "未唤醒消息必须零响应"
 
 
-class TestLlmToolSchema:
-    def test_tool_registered_with_name_and_docstring(self, plugin: FeishuQaPlugin) -> None:
-        fn = plugin.search_feishu_qa
-        assert getattr(fn, "_llm_tool_name", "") == "search_feishu_qa"
-        doc = (fn.__doc__ or "").strip()
-        assert doc, "llm tool 必须有描述(AstrBot 解析生成 schema)"
-        assert "Args:" in doc, "docstring 必须含 Args: 段否则参数 schema 为空"
-
-    def test_search_tool_returns_structured_json(self, plugin: FeishuQaPlugin) -> None:
-        event = AstrMessageEvent()
-        # 契约:必须返回 str 给 LLM(核心执行器对 MessageEventResult 会直发并终止
-        # Agent,搜索结果显然不该这样投递——v0.3.3 及之前 yield plain_result 是错的)
-        outs = run_handler(plugin.search_feishu_qa(event, query="cakewalk 没声音"))
-        assert isinstance(outs[0], str), "工具必须返回字符串而非消息链"
-        payload = json.loads(outs[0])
-        assert payload["matches"], "相关 query 应有命中"
-        match = payload["matches"][0]
-        for key in ("title", "section", "body"):
-            assert key in match
-
-
-class TestQaEntryImages:
-    """qa_entry_images 工具:校验边界与直发契约(规格 §8/§9/§15)。"""
-
-    ENTRY_ID = "qa_cf9823b16ecb05f4"  # 夹具中含 2 张图的条目
-
-    def _entry(self, plugin: FeishuQaPlugin):
-        return next(e for e in plugin._entries if e.id == self.ENTRY_ID)
-
-    def _seed_images(self, plugin: FeishuQaPlugin, images) -> None:
-        root = Path(plugin.data_root)
-        for img in images:
-            p = root / (img.local_path or f"images/{img.image_id}.png")
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(b"\x89PNG-fake")
-
-    def test_tool_registered_with_docstring(self, plugin: FeishuQaPlugin) -> None:
-        fn = plugin.qa_entry_images
-        assert getattr(fn, "_llm_tool_name", "") == "qa_entry_images"
-        doc = (fn.__doc__ or "").strip()
-        assert "Args:" in doc and "entry_id" in doc
-
-    def test_invalid_id_format_rejected(self, plugin: FeishuQaPlugin) -> None:
-        out = run_handler(
-            plugin.qa_entry_images(AstrMessageEvent(), entry_id="../../secret")
-        )
-        assert isinstance(out[0], str) and "格式非法" in out[0]
-
-    def test_unknown_entry_rejected(self, plugin: FeishuQaPlugin) -> None:
-        out = run_handler(
-            plugin.qa_entry_images(AstrMessageEvent(), entry_id="qa_" + "0" * 16)
-        )
-        assert isinstance(out[0], str) and "不在当前语料中" in out[0]
-
-    def test_entry_without_images(self, plugin: FeishuQaPlugin) -> None:
-        noimg = next(e for e in plugin._entries if not e.images)
-        out = run_handler(
-            plugin.qa_entry_images(AstrMessageEvent(), entry_id=noimg.id)
-        )
-        assert isinstance(out[0], str) and "没有配图" in out[0]
-
-    def test_missing_image_files_rejected(self, plugin: FeishuQaPlugin) -> None:
-        # 条目声明了图但本地一个文件都没有(同步未下载成功)
-        out = run_handler(
-            plugin.qa_entry_images(AstrMessageEvent(), entry_id=self.ENTRY_ID)
-        )
-        assert isinstance(out[0], str) and "本地图片文件缺失" in out[0]
-
-    def test_direct_send_via_merged_forward(self, plugin, monkeypatch) -> None:
-        self._seed_images(plugin, self._entry(plugin).images)
-        monkeypatch.setattr(
-            FeishuQaPlugin, "_supports_merged_forward", staticmethod(lambda n: True)
-        )
-        out = run_handler(
-            plugin.qa_entry_images(AstrMessageEvent(), entry_id=self.ENTRY_ID)
-        )
-        result = out[0]
-        assert not isinstance(result, str), "有效条目必须返回消息链(直发契约)"
-        assert len(result.chain) == 1
-        node = result.chain[0]
-        assert node.type == "Node"
-        images = [c for c in node.content if c.type == "Image"]
-        assert len(images) == 2, "应携带条目全部图片"
-        assert node.content[0].type == "Plain"
-
-    def test_fallback_plain_multi_image(self, plugin, monkeypatch) -> None:
-        self._seed_images(plugin, self._entry(plugin).images)
-        monkeypatch.setattr(
-            FeishuQaPlugin, "_supports_merged_forward", staticmethod(lambda n: False)
-        )
-        out = run_handler(
-            plugin.qa_entry_images(AstrMessageEvent(), entry_id=self.ENTRY_ID)
-        )
-        chain = out[0].chain
-        # 直发回退链:标题说明 + 逐张图片
-        assert [c[0] for c in chain] == ["plain", "image", "image"]
-
-    def test_partial_missing_sends_existing_only(self, plugin, monkeypatch) -> None:
-        entry = self._entry(plugin)
-        self._seed_images(plugin, [entry.images[0]])  # 只落盘第一张
-        monkeypatch.setattr(
-            FeishuQaPlugin, "_supports_merged_forward", staticmethod(lambda n: True)
-        )
-        out = run_handler(
-            plugin.qa_entry_images(AstrMessageEvent(), entry_id=self.ENTRY_ID)
-        )
-        images = [c for c in out[0].chain[0].content if c.type == "Image"]
-        assert len(images) == 1, "缺图只跳过缺失文件,不整体失败"
-
-    def test_duplicate_images_deduped(self, plugin, monkeypatch) -> None:
-        entry = self._entry(plugin)
-        self._seed_images(plugin, [entry.images[0]])
-        entry.images.append(entry.images[0])  # 人为重复引用同一张图
-        monkeypatch.setattr(
-            FeishuQaPlugin, "_supports_merged_forward", staticmethod(lambda n: False)
-        )
-        out = run_handler(
-            plugin.qa_entry_images(AstrMessageEvent(), entry_id=self.ENTRY_ID)
-        )
-        image_parts = [c for c in out[0].chain if c[0] == "image"]
-        assert len(image_parts) == 1, "重复引用的同一张图只发送一次"
-
-
 class TestFaqCitationGuidance:
     """on_llm_request 钩子:FAQ 出处引用规范注入。"""
 
@@ -246,6 +122,10 @@ class TestFaqCitationGuidance:
         assert getattr(plugin.add_faq_citation_guidance, "_filter", ("",))[0] == (
             "on_llm_request"
         )
+        assert getattr(plugin.qa_send_answer, "_llm_tool_name", "") == (
+            "qa_send_answer"
+        )
+
 
     def test_hook_appends_guidance(self, plugin: FeishuQaPlugin) -> None:
         class Req:
@@ -286,7 +166,7 @@ class TestFaqCitationGuidance:
 
         assert req.system_prompt == _FAQ_CITATION_GUIDANCE
         assert "[语料匹配]" in req.prompt
-        assert "entry_ids=qa_" in req.prompt
+        assert "[[qa:0]]" in req.prompt
         assert "qa_send_answer" in req.prompt
 
     def test_no_match_leaves_prompt_untouched(self, plugin) -> None:

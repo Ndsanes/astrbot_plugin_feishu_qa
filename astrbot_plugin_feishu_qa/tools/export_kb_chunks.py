@@ -26,17 +26,17 @@ sys.path.insert(0, str(REPO_ROOT))
 from astrbot_plugin_feishu_qa.corpus.builder import build_manifest  # noqa: E402
 from astrbot_plugin_feishu_qa.corpus.parser import parse_xml  # noqa: E402
 
+
 # 短标记:语义由系统提示词里的 FAQ 引用规范解释,chunk 内只保留指针本身
-IMAGE_MARKER = "[配图 {eid}]"
-
-
 def build_chunk_content(entry: dict) -> str:
-    """单条 QA → 单个 chunk 的正文(breadcrumb 标题 + 原文 + 截图标记)。"""
+    """单条 QA → 单个 chunk 的正文(breadcrumb 标题 + 原文)。
+
+    v0.8.0 起移除 [配图] 标记:条目发现改由 on_llm_request 命中预判的
+    [[qa:N]] 魔法 token 承载,chunk 内不再携带指针(参考 Modu ADR-011)。
+    """
     section = " > ".join(entry.get("section_path") or [])
     title = entry.get("raw_title") or entry.get("title") or ""
     lines = [f"【全家桶FAQ > {section}】{title}", entry.get("body", "").strip()]
-    if entry.get("images"):
-        lines.append(IMAGE_MARKER.format(eid=entry["id"]))
     return "\n".join(part for part in lines if part)
 
 
@@ -82,16 +82,9 @@ def main() -> int:
     out = REPO_ROOT / args.out
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
-    marked = sum(
-        1
-        for c in payload["documents"][0]["chunks"]
-        if "[配图 qa_" in c
-    )
     name = payload["documents"][0]["file_name"]
     total = len(payload["documents"][0]["chunks"])
-    print(
-        f"payload 就绪: {out}\n  文档={name} chunks={total} 含图标记={marked}"
-    )
+    print(f"payload 就绪: {out}\n  文档={name} chunks={total}")
 
     if args.upload:
         from astrbot_api import AstrBotClient

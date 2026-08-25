@@ -32,6 +32,15 @@ class AstrMessageEvent:
     def get_self_id(self):
         return self._self_id
 
+
+    def set_extra(self, key, value):
+        if not hasattr(self, "_extras"):
+            self._extras = {}
+        self._extras[key] = value
+
+    def get_extra(self, key, default=None):
+        return getattr(self, "_extras", {}).get(key, default)
+
     def get_platform_name(self):
         return getattr(self, "_platform_name", "")
 

@@ -40,13 +40,14 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 # FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
 _FAQ_CITATION_GUIDANCE = (
     "\n[FAQ 引用规范] 知识库结果分两类,处理方式不同:"
-    "(A)「【全家桶FAQ >」开头的条目是精选问答原文——命中时调用 qa_send_answer"
-    "(entry_ids=条目标记里的 id,多条相关就逗号分隔一并传入),插件会把飞书文档"
-    "章节直达链接列表发给用户;之后只做简短衔接或追问,不要复述正文。"
+    "(A)「【全家桶FAQ >」开头的条目是精选问答原文——命中时调用 qa_send_answer,"
+    "entry_ids 填用户消息尾部[语料匹配]指令里给出的 [[qa:N]] token"
+    "(多个逗号分隔,按原样搬运),插件会把飞书文档章节直达链接列表发给用户;"
+    "之后只做简短衔接或追问,不要复述正文。"
     "(B)其他来源(如 Cakewalk sonar 手册)没有可跳转的文档,直接依据知识块"
     "组织回答并翻译要点。"
     "不要臆测知识块里「参考图N」「如图」指代的图片内容;"
-    "不要把 [配图 qa_xxx] 标记原样输出给用户。"
+    "不要把 [配图 …] 类标记原样输出给用户。"
 )
 
 
@@ -56,7 +57,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.7.6",
+    "0.8.0",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -301,87 +302,6 @@ class FeishuQaPlugin(Star):
             event.stop_event()
         # miss/medium:不回复、不阻断 → 主 Agent 正常接管(可调 search tool)
 
-    @filter.llm_tool(name="search_feishu_qa")
-    async def search_feishu_qa(self, event: AstrMessageEvent, query: str):
-        """在飞书 Q&A 文档中搜索相关问答,返回原文片段。
-
-        Args:
-            query (str): 用户的实际问题或关键词
-        """
-        if self._retriever is None:
-            return "search_feishu_qa: 语料未就绪"
-        results = self._retriever.search(query, top_k=3)
-        if not results or results[0].confidence == "LOW":
-            payload = {"matches": [], "note": "没有找到足够相关的 QA"}
-        else:
-            payload = {
-                "matches": [
-                    {
-                        "title": r.entry.raw_title,
-                        "section": " > ".join(r.entry.section_path),
-                        "symptoms": r.entry.symptom_tags,
-                        "body": r.entry.body[:1500],
-                        "images_count": len(r.entry.images),
-                        "confidence": round(r.score, 2),
-                    }
-                    for r in results
-                    if r.confidence != "LOW"
-                ],
-                "note": "只允许依据以上原文回答;不足时明确告知用户资料中没有。",
-            }
-        return json.dumps(payload, ensure_ascii=False)
-
-    @filter.llm_tool(name="qa_entry_images")
-    async def qa_entry_images(self, event: AstrMessageEvent, entry_id: str):
-        """把指定 QA 条目的操作截图直接发送给用户。仅当检索结果带截图标记且
-        用户需要查看截图时调用;发送成功后不要向用户复述发送过程。
-
-        Args:
-            entry_id (str): QA 条目 ID,形如 qa_xxxxxxxxxxxxxxxx,只能取自检索结果中的截图标记
-        """
-        import astrbot.api.message_components as Comp
-        from astrbot.api.event import MessageEventResult
-
-        if not re.fullmatch(r"qa_[0-9a-f]{16}", entry_id or ""):
-            return "图片资源不存在:entry_id 格式非法"
-        entry = next((e for e in self._entries if e.id == entry_id), None)
-        if entry is None:
-            return f"图片资源不存在:{entry_id} 不在当前语料中"
-        if not entry.images:
-            return "该条目没有配图"
-        paths: list[str] = []
-        for img in entry.images:
-            path = self.store.image_path(
-                img.local_path or f"images/{img.image_id}.png"
-            )
-            if path.is_file() and path.stat().st_size > 0:
-                paths.append(str(path))
-        paths = list(dict.fromkeys(paths))  # 去重保序(同图被条目重复引用时)
-        if not paths:
-            return "图片资源不存在:本地图片文件缺失"
-
-        platform_name = ""
-        with contextlib.suppress(Exception):
-            platform_name = str(event.get_platform_name() or "")
-        caption = f"【配图】{entry.raw_title}"
-        result = None
-        if self._supports_merged_forward(platform_name):
-            try:
-                uin = int(event.get_self_id() or 10000)
-                content: list = [Comp.Plain(caption)]
-                content.extend(Comp.Image.fromFileSystem(p) for p in paths)
-                node = Comp.Node(uin=uin, name="Q&A 助手", content=content)
-                result = MessageEventResult(chain=[node])
-            except Exception as exc:
-                logger.warning("[FeishuQA] 配图合并转发构建失败,回退普通消息: %s", exc)
-                result = None
-        if result is None:
-            result = MessageEventResult().message(caption)
-            for p in paths:
-                result.file_image(p)
-        # 返回 MessageEventResult:核心按 tool_direct_result 直发给用户并结束本轮
-        # Agent;返回 str 则作为工具结果回传 LLM 继续。两条路径互斥,见执行器契约。
-        return result
 
     @filter.llm_tool(name="qa_send_answer")
     async def qa_send_answer(self, event: AstrMessageEvent, entry_ids: str):
@@ -391,16 +311,19 @@ class FeishuQaPlugin(Star):
         不要复述条目内容。
 
         Args:
-            entry_ids (str): QA 条目 ID,形如 qa_xxxxxxxxxxxxxxxx,多个用英文逗号分隔,取自条目标记
+            entry_ids (str): 语料匹配指令给出的 [[qa:N]] token(多个逗号分隔),
+                或真实条目 ID qa_xxxxxxxxxxxxxxxx
         """
-        ids = [s for s in re.split(r"[,，、;\s]+", entry_ids or "") if s.strip()]
+        refs = event.get_extra("_qa_entry_refs") or {}
+        wanted = [s for s in re.split(r"[,，、;\s]+", entry_ids or "") if s.strip()]
         entries, skipped, seen = [], [], set()
-        for raw in ids:
-            if not re.fullmatch(r"qa_[0-9a-f]{16}", raw) or raw in seen:
-                skipped.append(raw)
+        for raw in wanted:
+            # 魔法链接还原(Modu ADR-011):token → 真实条目;真实 ID 直接放行
+            eid = refs.get(raw, raw)
+            if eid in seen:
                 continue
-            seen.add(raw)
-            entry = next((e for e in self._entries if e.id == raw), None)
+            seen.add(eid)
+            entry = next((e for e in self._entries if e.id == eid), None)
             if entry is None:
                 skipped.append(raw)
             else:
@@ -465,13 +388,23 @@ class FeishuQaPlugin(Star):
         hits = [r for r in results if r.confidence != "LOW"]
         if not hits:
             return
-        ids = ",".join(r.entry.id for r in hits)
-        titles = "；".join(r.entry.raw_title for r in hits)
+
+        # 魔法链接 token 化(参考 Modu ADR-011):长 entry_id 对模型隐藏,
+        # 只发短 token;映射存事件级 extra,qa_send_answer 展开还原。
+        refs: dict[str, str] = {}
+        items = []
+        for i, r in enumerate(hits):
+            token = f"[[qa:{i}]]"
+            refs[token] = r.entry.id
+            items.append(f"{token}《{r.entry.raw_title}》")
+        event.set_extra("_qa_entry_refs", refs)
+
         req.prompt = (
             (req.prompt or "")
-            + f"\n[语料匹配] 本条消息已命中精选问答:{titles}(entry_ids={ids})。"
-            "回答前必须先调用 qa_send_answer(entry_ids=上述值)发送章节直达链接,"
-            "再视需要简短补充;不要转述条目正文。"
+            + f"\n[语料匹配] 本条消息已命中精选问答:{' '.join(items)}。"
+            "回答前必须先调用 qa_send_answer,entry_ids 按原样填入上述 token"
+            "(逗号分隔),插件会自动发送飞书文档章节直达链接;"
+            "之后只做简短衔接,不要转述条目正文。"
         )
 
     # ── 管理指令 ──

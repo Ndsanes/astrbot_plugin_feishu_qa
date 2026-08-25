@@ -359,3 +359,8 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   地址栏无 #fragment——QQ 官方原生 markdown 渲染剥 href 锚点(裸文本 URL
   则走客户端识别路径完整保留,已实测)。所有平台统一"标题行 + 👉 裸链接",
   回归测试断言输出禁含 "]("。基线 248 不变。
+- **qa v0.8.0(魔法链接 token 化 + 功能瘦身)**:参考 Modu ADR-011——命中
+  预判改发 `[[qa:N]]` 短 token(映射存事件级 extra),qa_send_answer 展开
+  还原(真实 ID 双轨放行);下线 qa_entry_images/search_feishu_qa 工具;
+  KB chunk 去除 [配图] 标记并重导。注意:KB documents 列表主键是 doc_id,
+  DELETE 打错键会静默无效。基线 248→237。
