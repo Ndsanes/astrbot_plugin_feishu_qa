@@ -374,3 +374,7 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   on_llm_tool_respond 解析 astr_kb_search 结果中的 [ref:短码],命中即由
   插件自动投递章节链接列表(上限3条/同轮去重),零模型依赖。
   引用规范同步改为自动化语义。qa v0.8.2 已部署。
+  **v0.8.2 修正**:12:30 实测自动附链生效(三条链接与条目一一对应)但
+  用了裸链接——此前"markdown 渲染剥 fragment"系 locator 为空时代的
+  误判(链接里本无锚点可剥)。qq_official 恢复 markdown 超链接形态,
+  新增 TestAutoFaqLinks 四用例。基线 237→240。
