@@ -399,9 +399,18 @@ class FeishuQaPlugin(Star):
                 new_entries.append(entry)
         if not new_entries:
             return
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        md_mode = platform_name == "qq_official"
         lines = ["📎 以上解答的文档直达章节:"]
         for i, entry in enumerate(new_entries, 1):
-            lines.append(f"{i}. {self._wiki_block_url(entry)}(《{entry.raw_title}》)")
+            url = self._wiki_block_url(entry)
+            if md_mode:
+                safe_title = entry.raw_title.replace("[", "［").replace("]", "］")
+                lines.append(f"{i}. [{safe_title}]({url})")
+            else:
+                lines.append(f"{i}、【{entry.raw_title}】👉 {url}")
         direct = DirectAnswer(
             text="\n".join(lines), image_paths=[], entry_id=new_entries[0].id
         )

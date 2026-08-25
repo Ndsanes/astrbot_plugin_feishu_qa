@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from astrbot.api.event import AstrMessageEvent  # 桩包(或真实包)
@@ -265,6 +266,57 @@ class TestQaSendAnswer:
         out = run_handler(plugin.qa_send_answer(event, entry_ids="zzzzz"))
         assert isinstance(out[0], str) and "没有可投递" in out[0]
         assert event.sent == [], "未知短码不得发送任何消息"
+
+
+class TestAutoFaqLinks:
+    """astr_kb_search 命中 FAQ 后的确定性自动附链(on_llm_tool_respond)。"""
+
+    def _tool_result(self, codes):
+        text = "".join(
+            f"【全家桶FAQ > 章节】标题\n正文\n[ref:{c}]\n相关度: 1.00\n\n"
+            for c in codes
+        )
+        return SimpleNamespace(content=[SimpleNamespace(text=text)])
+
+    def _tool(self, name="astr_kb_search"):
+        return SimpleNamespace(name=name)
+
+    def test_auto_sends_markdown_links_for_qq_official(
+        self, plugin, monkeypatch
+    ) -> None:
+        entry = next(e for e in plugin._entries if e.source_locator)
+        event = AstrMessageEvent()
+        monkeypatch.setattr(
+            event, "get_platform_name", lambda: "qq_official", raising=False
+        )
+        run_handler(plugin.auto_send_faq_links(
+            event,
+            self._tool(),
+            None,
+            self._tool_result([entry.id[3:8]]),
+        ))
+        assert len(event.sent) == 1
+        joined = "\n".join(
+            c[1] for c in event.sent[0].chain if isinstance(c, tuple) and c[0] == "plain"
+        )
+        assert f"[{entry.raw_title}]" \
+            f"(https://my.feishu.cn/wiki/test#{entry.source_locator})" in joined
+
+    def test_dedupes_within_same_event(self, plugin) -> None:
+        entry = next(e for e in plugin._entries if e.source_locator)
+        event = AstrMessageEvent()
+        result = self._tool_result([entry.id[3:8]])
+        run_handler(plugin.auto_send_faq_links(event, self._tool(), None, result))
+        first = len(event.sent)
+        assert first >= 1
+        run_handler(plugin.auto_send_faq_links(event, self._tool(), None, result))
+        assert len(event.sent) == first, "同轮重复命中不得重复发链接"
+
+    def test_non_kb_tool_ignored(self, plugin) -> None:
+        tool = SimpleNamespace(name="other_tool")
+        event = AstrMessageEvent()
+        run_handler(plugin.auto_send_faq_links(event, tool, None, self._tool_result([])))
+        assert event.sent == []
 
 
 class TestAdminCommands:
