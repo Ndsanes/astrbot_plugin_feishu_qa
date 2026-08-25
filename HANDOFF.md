@@ -378,3 +378,7 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   用了裸链接——此前"markdown 渲染剥 fragment"系 locator 为空时代的
   误判(链接里本无锚点可剥)。qq_official 恢复 markdown 超链接形态,
   新增 TestAutoFaqLinks 四用例。基线 237→240。
+- **qa v0.8.3(形态统一)**:12:49 实测群聊 @ 命中仍走 Tier 0"原文全文
+  +截图"旧形态(词法 HIGH 直答),与私聊链接形态不一致——Tier 0 投递
+  统一改为章节直达链接列表(经 _build_link_list,平台感知 md/裸链接),
+  /问 与群内 @ 同步生效;零 LLM 与 stop_event 阻断不变。基线 240。
