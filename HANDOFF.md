@@ -348,6 +348,10 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   前跑本地词法检索,MEDIUM+ 命中把具体 entry_ids 指令注入 req.prompt 尾部
   (缓存安全通道:系统提示词恒定逐字节不变,AGENTS.md 检索不进系统提示词
   约束得以遵守);未命中零改动。基线 246→248。
+  **v0.7.5 补充根因**:relinked=0 的更深原因——lark-cli docs +fetch 默认
+  `--detail simple` 导出 XML 不含块 ID,source_locator 自始为空(测试夹具
+  是人工带 id 导出,掩盖了这一点)。platform fetch_doc 加 detail 透传,
+  qa 同步改 with-ids 后 relinked=42 全量填充(platform v0.4.7/qa v0.7.5)。
   部署后首轮同步 relinked=0:线上 locator 与实时抓取一致,块 ID 未过期;
   "点了不跳转"的剩余变量锁定在 QQ→飞书客户端传递链路(疑似移动端
   丢 #fragment),待用户桌面浏览器 A/B 鉴别。
