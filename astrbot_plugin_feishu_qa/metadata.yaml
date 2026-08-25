@@ -2,7 +2,7 @@ name: astrbot_plugin_feishu_qa
 display_name: FeishuQA
 desc: 基于飞书 Q&A 文档的低成本领域问答机器人:确定性检索直答+截图,仅在必要时调用主 Agent。
 short_desc: 飞书文档驱动的群聊 FAQ 机器人,高置信直答零 LLM 调用
-version: v0.8.3
+version: v0.8.4
 author: NDsans
 repo: https://github.com/Ndsanes/astrbot_plugin_feishu_qa
 support_platforms:

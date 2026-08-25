@@ -54,7 +54,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.3",
+    "0.8.4",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -382,7 +382,7 @@ class FeishuQaPlugin(Star):
         platform_name = ""
         with contextlib.suppress(Exception):
             platform_name = str(event.get_platform_name() or "")
-        lines = [f"📖 找到 {len(entries)} 条官方整理解答(点链接直达文档对应章节):"]
+        lines = [f" >  直接命中 {len(entries)} 条肖闻的解答: \n"]
         md = platform_name == "qq_official"
         for i, entry in enumerate(entries, 1):
             url = self._wiki_block_url(entry)
@@ -391,7 +391,7 @@ class FeishuQaPlugin(Star):
                 lines.append(f"{i}. [{safe_title}]({url})")
             else:
                 lines.append(f"{i}、【{entry.raw_title}】👉 {url}")
-        lines.append("\n📄 来源:《有福同享全家桶Q&A汇总》(肖闻 Xiaowenn 整理)")
+        lines.append("\n > Xiaowenn《有福同享全家桶Q&A汇总》")
         return DirectAnswer(
             text="\n".join(lines), image_paths=[], entry_id=entries[0].id
         )
