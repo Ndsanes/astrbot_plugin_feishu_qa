@@ -45,8 +45,6 @@ _FAQ_CITATION_GUIDANCE = (
     "章节直达链接列表发给用户;之后只做简短衔接或追问,不要复述正文。"
     "(B)其他来源(如 Cakewalk sonar 手册)没有可跳转的文档,直接依据知识块"
     "组织回答并翻译要点。"
-    "统一要求:回答用到 FAQ 条目内容时,末尾另起一行注明"
-    "📄 出处:《有福同享全家桶Q&A汇总》条目标题方括号里的章节路径;"
     "不要臆测知识块里「参考图N」「如图」指代的图片内容;"
     "不要把 [配图 qa_xxx] 标记原样输出给用户。"
 )
@@ -58,7 +56,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.7.5",
+    "0.7.6",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -411,14 +409,24 @@ class FeishuQaPlugin(Star):
             bad = ",".join(skipped) if skipped else "未提供有效条目"
             return f"发送失败:没有可投递的条目({bad})"
 
-        # 实测(2026-08-25):QQ 官方 markdown(msg_type=2)渲染会剥掉 href 的
-        # #fragment——裸文本 URL 反而走客户端识别路径完整保留锚点。
-        # 故所有平台统一用"标题行 + 👉 裸链接",不使用 [标题](url) 形态。
-        lines = [f"📖 命中 {len(entries)} 条官方整理的解答(点链接直达文档对应章节):"]
+        # v0.7.4 曾因 source_locator 为空误判"markdown 渲染剥锚点"而全面
+        # 回退裸链接;with-ids 修复后锚点真实可用,qq_official 恢复原生
+        # markdown 超链接(msg_type=2 默认渲染,标题可点击)。其他平台
+        # (OneBot 纯文本)维持"标题行 + 👉 裸链接"避免字面量输出。
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+
+        lines = [f"命中 {len(entries)} 条肖闻的解答:"]
         for i, entry in enumerate(entries, 1):
-            lines.append(f"\n{i}、【{entry.raw_title}】")
-            lines.append(f"👉 {self._wiki_block_url(entry)}")
-        lines.append("\n📄 来源:《有福同享全家桶Q&A汇总》(肖闻 Xiaowenn 整理)")
+            url = self._wiki_block_url(entry)
+            if platform_name == "qq_official":
+                safe_title = entry.raw_title.replace("[", "［").replace("]", "］")
+                lines.append(f"\n{i}. [{safe_title}]({url})")
+            else:
+                lines.append(f"\n{i}、【{entry.raw_title}】")
+                lines.append(f"👉 {url}")
+        lines.append("\n > 来源:Xiaowenn《有福同享全家桶Q&A汇总》")
         direct = DirectAnswer(
             text="\n".join(lines), image_paths=[], entry_id=entries[0].id
         )
@@ -774,4 +782,3 @@ class FeishuQaPlugin(Star):
     @staticmethod
     def _strip_wake(message_str: str) -> str:
         return (message_str or "").strip()
-

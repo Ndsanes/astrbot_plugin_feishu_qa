@@ -255,7 +255,7 @@ class TestFaqCitationGuidance:
         req = Req()
         run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
         assert req.system_prompt.startswith("base-prompt")
-        assert "出处:《有福同享全家桶Q&A汇总》" in req.system_prompt
+        assert "章节直达链接" in req.system_prompt
         assert "qa_send_answer" in req.system_prompt
 
     def test_guidance_handles_empty_system_prompt(self, plugin) -> None:
@@ -325,8 +325,7 @@ class TestQaSendAnswer:
     def test_qq_official_emits_markdown_hyperlink(
         self, plugin: FeishuQaPlugin, monkeypatch
     ) -> None:
-        """回归锚点:QQ 官方 markdown 渲染会剥 href 的 #fragment(2026-08-25
-        实测),故任何平台都不得使用 [标题](url) 形态,统一标题行+裸链接。"""
+        """qq_official 走原生 markdown(msg_type=2),标题为可点击超链接。"""
         entry = next(e for e in plugin._entries if e.source_locator)
         event = AstrMessageEvent()
         monkeypatch.setattr(
@@ -339,14 +338,14 @@ class TestQaSendAnswer:
             c[1]
             for c in event.sent[0].chain
             if isinstance(c, tuple) and c[0] == "plain"
-        ) or "\n".join(
-            c.text
-            for c in getattr(event.sent[0].chain[0], "content", [])
-            if c.type == "Plain"
         )
-        expected_url = f"https://my.feishu.cn/wiki/test#{entry.source_locator}"
-        assert expected_url in all_text
-        assert "](" not in all_text, "markdown 超链接形态会丢锚点,禁止回潮"
+        expected = (
+            f"1. [{entry.raw_title}]"
+            f"(https://my.feishu.cn/wiki/test#{entry.source_locator})"
+        )
+        assert expected in all_text
+        assert "命中 1 条肖闻的解答" in all_text
+        assert "Xiaowenn《有福同享全家桶Q&A汇总》" in all_text
 
 
     def test_generic_platform_falls_back_to_bare_url(
