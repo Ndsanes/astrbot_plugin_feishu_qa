@@ -146,39 +146,6 @@ class TestFaqCitationGuidance:
         run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
         assert req.system_prompt.startswith("\n[FAQ 引用规范]")
 
-    def test_hit_prediction_injects_into_user_prompt(
-        self, plugin: FeishuQaPlugin
-    ) -> None:
-        """词法命中 MEDIUM+ 时指令注入 req.prompt 尾部(缓存安全通道)。"""
-
-        class Req:
-            def __init__(self) -> None:
-                self.system_prompt = ""
-                self.prompt = "我 cakewalk 装好之后 全是 bandlab 找不到自己装的了"
-
-        event = AstrMessageEvent(
-            message_str="我 cakewalk 装好之后 全是 bandlab 找不到自己装的了"
-        )
-        req = Req()
-        run_handler(plugin.add_faq_citation_guidance(event, req))
-        # 缓存安全不变量:系统提示词只含恒定规范,无随消息变化的内容
-        from astrbot_plugin_feishu_qa.main import _FAQ_CITATION_GUIDANCE
-
-        assert req.system_prompt == _FAQ_CITATION_GUIDANCE
-        assert "[语料匹配]" in req.prompt
-        assert "[[qa:0]]" in req.prompt
-        assert "qa_send_answer" in req.prompt
-
-    def test_no_match_leaves_prompt_untouched(self, plugin) -> None:
-        class Req:
-            def __init__(self) -> None:
-                self.system_prompt = ""
-                self.prompt = "今天天气怎么样"
-
-        event = AstrMessageEvent(message_str="今天天气怎么样")
-        req = Req()
-        run_handler(plugin.add_faq_citation_guidance(event, req))
-        assert req.prompt == "今天天气怎么样", "未命中不得改动用户消息"
 
 
 class TestQaSendAnswer:
@@ -278,6 +245,26 @@ class TestQaSendAnswer:
             c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
         )
         assert "https://my.feishu.cn/wiki/test\n" in all_text + "\n"
+
+    def test_short_code_resolves_entry(self, plugin: FeishuQaPlugin) -> None:
+        """[ref:短码] → 短码解析 → 链接列表(魔法链接主路径)。"""
+        entry = next(
+            e for e in plugin._entries if e.source_locator and e.images
+        )
+        code = entry.id[3:8]
+        event = AstrMessageEvent()
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=code))
+        assert isinstance(out[0], str) and "直达链接" in out[0]
+        all_text = "".join(
+            c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
+        )
+        assert f"test#{entry.source_locator}" in all_text
+
+    def test_unknown_code_rejected_without_send(self, plugin) -> None:
+        event = AstrMessageEvent()
+        out = run_handler(plugin.qa_send_answer(event, entry_ids="zzzzz"))
+        assert isinstance(out[0], str) and "没有可投递" in out[0]
+        assert event.sent == [], "未知短码不得发送任何消息"
 
 
 class TestAdminCommands:

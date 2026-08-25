@@ -41,13 +41,13 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 _FAQ_CITATION_GUIDANCE = (
     "\n[FAQ 引用规范] 知识库结果分两类,处理方式不同:"
     "(A)「【全家桶FAQ >」开头的条目是精选问答原文——命中时调用 qa_send_answer,"
-    "entry_ids 填用户消息尾部[语料匹配]指令里给出的 [[qa:N]] token"
-    "(多个逗号分隔,按原样搬运),插件会把飞书文档章节直达链接列表发给用户;"
+    "entry_ids 填条目末尾方括号里的引用短码(如 [ref:a694d] 取 a694d,"
+    "多条相关就逗号分隔一并传入),插件会把飞书文档章节直达链接列表发给用户;"
     "之后只做简短衔接或追问,不要复述正文。"
     "(B)其他来源(如 Cakewalk sonar 手册)没有可跳转的文档,直接依据知识块"
     "组织回答并翻译要点。"
     "不要臆测知识块里「参考图N」「如图」指代的图片内容;"
-    "不要把 [配图 …] 类标记原样输出给用户。"
+    "不要把条目末尾的 [ref:xxxxx] 标记原样输出给用户。"
 )
 
 
@@ -57,7 +57,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.0",
+    "0.8.1",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -76,6 +76,7 @@ class FeishuQaPlugin(Star):
 
         self._entries: list = []
         self._retriever: Retriever | None = None
+        self._entry_refs: dict = {}
         self._router: AnswerRouter | None = None
         self._load_corpus()
 
@@ -112,6 +113,12 @@ class FeishuQaPlugin(Star):
                 e for e in self._manifest_to_entries(manifest) if e.body or e.images
             ]
             self._entries = entries
+            # 短码索引(魔法链接,Modu ADR-011):code = 稳定 entry_id 去前缀后
+            # 前 5 位十六进制;同时保留完整 id 以兼容旧调用。
+            self._entry_refs = {}
+            for e in entries:
+                self._entry_refs[e.id] = e
+                self._entry_refs.setdefault(e.id[3:8], e)
             self._retriever = Retriever(
                 entries,
                 high_threshold=float(self._cfg("HIGH_CONFIDENCE_THRESHOLD", 9.0)),
@@ -311,23 +318,22 @@ class FeishuQaPlugin(Star):
         不要复述条目内容。
 
         Args:
-            entry_ids (str): 语料匹配指令给出的 [[qa:N]] token(多个逗号分隔),
-                或真实条目 ID qa_xxxxxxxxxxxxxxxx
+            entry_ids (str): 知识库条目末尾 [ref:xxxxx] 里的引用短码,
+                多个用英文逗号分隔
         """
-        refs = event.get_extra("_qa_entry_refs") or {}
         wanted = [s for s in re.split(r"[,，、;\s]+", entry_ids or "") if s.strip()]
         entries, skipped, seen = [], [], set()
         for raw in wanted:
-            # 魔法链接还原(Modu ADR-011):token → 真实条目;真实 ID 直接放行
-            eid = refs.get(raw, raw)
-            if eid in seen:
-                continue
-            seen.add(eid)
-            entry = next((e for e in self._entries if e.id == eid), None)
+            # 魔法短码(Modu ADR-011):知识块携带的引用码 → 语料条目;
+            # 完整条目 ID 亦接受。映射外取值一律拒绝,模型无法猜测绕过。
+            entry = self._entry_refs.get(raw)
             if entry is None:
                 skipped.append(raw)
-            else:
-                entries.append(entry)
+                continue
+            if entry.id in seen:
+                continue
+            seen.add(entry.id)
+            entries.append(entry)
         if not entries:
             bad = ",".join(skipped) if skipped else "未提供有效条目"
             return f"发送失败:没有可投递的条目({bad})"
@@ -349,7 +355,7 @@ class FeishuQaPlugin(Star):
             else:
                 lines.append(f"\n{i}、【{entry.raw_title}】")
                 lines.append(f"👉 {url}")
-        lines.append("\n > 来源:Xiaowenn《有福同享全家桶Q&A汇总》")
+        lines.append("\n > Xiaowenn《有福同享全家桶Q&A汇总》")
         direct = DirectAnswer(
             text="\n".join(lines), image_paths=[], entry_id=entries[0].id
         )
@@ -373,39 +379,12 @@ class FeishuQaPlugin(Star):
 
     @filter.on_llm_request()
     async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:
-        """注入 FAQ 引用规范与命中预判。
+        """注入 FAQ 引用规范(恒定文本,前缀缓存安全)。
 
-        系统提示词只追加恒定文本(前缀缓存安全);随消息变化的命中指令
-        注入 req.prompt 尾部——尾部本就逐轮变化,不破坏缓存(AGENTS.md
-        检索内容不进系统提示词之约束)。
+        条目发现由知识块内的 [ref:短码] 承载,模型从检索结果中原样搬运
+        短码调用 qa_send_answer;此处不再做词法预判与动态注入。
         """
         req.system_prompt = (req.system_prompt or "") + _FAQ_CITATION_GUIDANCE
-
-        query = self._strip_command(event.message_str or "")
-        if not query or self._retriever is None:
-            return
-        results = self._retriever.search(query, top_k=2)
-        hits = [r for r in results if r.confidence != "LOW"]
-        if not hits:
-            return
-
-        # 魔法链接 token 化(参考 Modu ADR-011):长 entry_id 对模型隐藏,
-        # 只发短 token;映射存事件级 extra,qa_send_answer 展开还原。
-        refs: dict[str, str] = {}
-        items = []
-        for i, r in enumerate(hits):
-            token = f"[[qa:{i}]]"
-            refs[token] = r.entry.id
-            items.append(f"{token}《{r.entry.raw_title}》")
-        event.set_extra("_qa_entry_refs", refs)
-
-        req.prompt = (
-            (req.prompt or "")
-            + f"\n[语料匹配] 本条消息已命中精选问答:{' '.join(items)}。"
-            "回答前必须先调用 qa_send_answer,entry_ids 按原样填入上述 token"
-            "(逗号分隔),插件会自动发送飞书文档章节直达链接;"
-            "之后只做简短衔接,不要转述条目正文。"
-        )
 
     # ── 管理指令 ──
 

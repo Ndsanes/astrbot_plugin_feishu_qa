@@ -28,15 +28,27 @@ from astrbot_plugin_feishu_qa.corpus.parser import parse_xml  # noqa: E402
 
 
 # 短标记:语义由系统提示词里的 FAQ 引用规范解释,chunk 内只保留指针本身
-def build_chunk_content(entry: dict) -> str:
-    """单条 QA → 单个 chunk 的正文(breadcrumb 标题 + 原文)。
+def entry_ref_code(entry_id: str) -> str:
+    """引用短码 = 稳定 entry_id 去 qa_ 前缀后的前 5 位十六进制。
 
-    v0.8.0 起移除 [配图] 标记:条目发现改由 on_llm_request 命中预判的
-    [[qa:N]] 魔法 token 承载,chunk 内不再携带指针(参考 Modu ADR-011)。
+    与运行时 _load_corpus 的 self._entry_refs 索引键保持同一函数。
+    """
+    return entry_id[3:8]
+
+
+def build_chunk_content(entry: dict) -> str:
+    """单条 QA → 单个 chunk 的正文(breadcrumb 标题 + 原文 + 引用短码)。
+
+    [ref:短码] 供模型命中后原样搬运调用 qa_send_answer(Modu ADR-011
+    魔法链接引用);短码由运行时 _entry_refs 索引解析回条目。
     """
     section = " > ".join(entry.get("section_path") or [])
     title = entry.get("raw_title") or entry.get("title") or ""
-    lines = [f"【全家桶FAQ > {section}】{title}", entry.get("body", "").strip()]
+    lines = [
+        f"【全家桶FAQ > {section}】{title}",
+        entry.get("body", "").strip(),
+        f"[ref:{entry_ref_code(entry['id'])}]",
+    ]
     return "\n".join(part for part in lines if part)
 
 
