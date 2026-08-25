@@ -54,7 +54,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.2",
+    "0.8.3",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -279,7 +279,13 @@ class FeishuQaPlugin(Star):
             event.stop_event()
             return
         if plan.kind == "direct" and plan.direct:
-            await self._send_direct(event, plan.direct)
+            entry = self._entry_refs.get(plan.direct.entry_id)
+            if entry is not None:
+                await self._send_direct(
+                    event, self._build_link_list(event, [entry])
+                )
+            else:
+                await self._send_direct(event, plan.direct)
             event.stop_event()  # 高置信已回答,阻断 LLM 流水线
             return
         yield event.plain_result(
@@ -302,7 +308,13 @@ class FeishuQaPlugin(Star):
             text, group_id=event.get_group_id(), umo=event.unified_msg_origin
         )
         if plan.kind == "direct" and plan.direct:
-            await self._send_direct(event, plan.direct)
+            entry = self._entry_refs.get(plan.direct.entry_id)
+            if entry is not None:
+                await self._send_direct(
+                    event, self._build_link_list(event, [entry])
+                )
+            else:
+                await self._send_direct(event, plan.direct)
             event.stop_event()
         # miss/medium:不回复、不阻断 → 主 Agent 正常接管(可调 search tool)
 
@@ -363,6 +375,25 @@ class FeishuQaPlugin(Star):
         return (
             f"已投递{len(entries)}条章节直达链接:《{titles}》{note};"
             "请勿复述条目正文,链接里含图文步骤。"
+        )
+
+    def _build_link_list(self, event, entries: list) -> DirectAnswer:
+        """条目列表 → 链接列表载荷(qq_official 用 markdown 超链接,其余裸链接)。"""
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        lines = [f"📖 找到 {len(entries)} 条官方整理解答(点链接直达文档对应章节):"]
+        md = platform_name == "qq_official"
+        for i, entry in enumerate(entries, 1):
+            url = self._wiki_block_url(entry)
+            if md:
+                safe_title = entry.raw_title.replace("[", "［").replace("]", "］")
+                lines.append(f"{i}. [{safe_title}]({url})")
+            else:
+                lines.append(f"{i}、【{entry.raw_title}】👉 {url}")
+        lines.append("\n📄 来源:《有福同享全家桶Q&A汇总》(肖闻 Xiaowenn 整理)")
+        return DirectAnswer(
+            text="\n".join(lines), image_paths=[], entry_id=entries[0].id
         )
 
     def _wiki_block_url(self, entry) -> str:
