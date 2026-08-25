@@ -109,6 +109,13 @@ class filter:
             return fn
         return deco
 
+    @staticmethod
+    def on_llm_tool_respond(*a, **k):
+        def deco(fn):
+            fn._filter = ("on_llm_tool_respond", a, k)
+            return fn
+        return deco
+
     class EventMessageType:
         GROUP_MESSAGE = "group"
         PRIVATE_MESSAGE = "private"

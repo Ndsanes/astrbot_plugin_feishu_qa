@@ -39,15 +39,12 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 
 # FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
 _FAQ_CITATION_GUIDANCE = (
-    "\n[FAQ 引用规范] 知识库结果分两类,处理方式不同:"
-    "(A)「【全家桶FAQ >」开头的条目是精选问答原文——命中时调用 qa_send_answer,"
-    "entry_ids 填条目末尾方括号里的引用短码(如 [ref:a694d] 取 a694d,"
-    "多条相关就逗号分隔一并传入),插件会把飞书文档章节直达链接列表发给用户;"
-    "之后只做简短衔接或追问,不要复述正文。"
+    "\n[FAQ 引用规范] 知识库结果分两类:"
+    "(A)「【全家桶FAQ >」开头的条目是精选问答原文,系统会自动为其附上"
+    "飞书文档章节直达链接——你只需依据条目内容组织文字回答,"
+    "不要复述条目正文,也不要输出条目末尾的 [ref:xxxxx] 标记。"
     "(B)其他来源(如 Cakewalk sonar 手册)没有可跳转的文档,直接依据知识块"
-    "组织回答并翻译要点。"
-    "不要臆测知识块里「参考图N」「如图」指代的图片内容;"
-    "不要把条目末尾的 [ref:xxxxx] 标记原样输出给用户。"
+    "组织回答并翻译要点;不要臆测知识块里「参考图N」「如图」指代的图片内容。"
 )
 
 
@@ -57,7 +54,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.1",
+    "0.8.2",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -376,6 +373,40 @@ class FeishuQaPlugin(Star):
         if entry.source_locator:
             return f"{base}#{entry.source_locator}"
         return base
+
+    @filter.on_llm_tool_respond()
+    async def auto_send_faq_links(self, event, tool, tool_args, tool_result) -> None:
+        """astr_kb_search 命中精选问答后,自动投递对应章节直达链接。
+
+        确定性投递:解析检索结果里的 [ref:短码],不依赖模型自觉调用工具;
+        同一轮会话内已发过的条目自动去重。单次最多附 3 条防刷屏。
+        """
+        if getattr(tool, "name", "") != "astr_kb_search" or tool_result is None:
+            return
+        try:
+            text = "\n".join(
+                c.text for c in tool_result.content if getattr(c, "text", None)
+            )
+        except Exception:
+            return
+        codes = list(dict.fromkeys(re.findall(r"\[ref:([a-z0-9]{5})\]", text)))[:3]
+        sent = set(event.get_extra("_faq_links_sent") or ())
+        new_entries = []
+        for code in codes:
+            entry = self._entry_refs.get(code)
+            if entry is not None and entry.id not in sent:
+                sent.add(entry.id)
+                new_entries.append(entry)
+        if not new_entries:
+            return
+        lines = ["📎 以上解答的文档直达章节:"]
+        for i, entry in enumerate(new_entries, 1):
+            lines.append(f"{i}. {self._wiki_block_url(entry)}(《{entry.raw_title}》)")
+        direct = DirectAnswer(
+            text="\n".join(lines), image_paths=[], entry_id=new_entries[0].id
+        )
+        await self._send_direct(event, direct)
+        event.set_extra("_faq_links_sent", sent)
 
     @filter.on_llm_request()
     async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:

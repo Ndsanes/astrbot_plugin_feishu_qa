@@ -136,7 +136,7 @@ class TestFaqCitationGuidance:
         run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
         assert req.system_prompt.startswith("base-prompt")
         assert "章节直达链接" in req.system_prompt
-        assert "qa_send_answer" in req.system_prompt
+        assert "qa_send_answer" not in req.system_prompt  # 附链已自动化,模型无需调用
 
     def test_guidance_handles_empty_system_prompt(self, plugin) -> None:
         class Req:
