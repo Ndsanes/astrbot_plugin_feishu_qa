@@ -369,3 +369,8 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   调 qa_send_answer,_entry_refs 双键索引(短码+完整id)解析。
   钩子动态词法预判整段移除——发现即持有,词法漏召/幻觉 token 两类
   失败模式一并消失。qa v0.8.1 + platform v0.4.7 均已部署。
+- **qa v0.8.2(自动附链定稿)**:11:45 实测模型再次跳过 qa_send_answer
+  直接转述步骤——确认小模型合规性不可依赖后,改为确定性钩子:
+  on_llm_tool_respond 解析 astr_kb_search 结果中的 [ref:短码],命中即由
+  插件自动投递章节链接列表(上限3条/同轮去重),零模型依赖。
+  引用规范同步改为自动化语义。qa v0.8.2 已部署。
