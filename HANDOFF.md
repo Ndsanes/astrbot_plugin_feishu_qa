@@ -364,3 +364,8 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   还原(真实 ID 双轨放行);下线 qa_entry_images/search_feishu_qa 工具;
   KB chunk 去除 [配图] 标记并重导。注意:KB documents 列表主键是 doc_id,
   DELETE 打错键会静默无效。基线 248→237。
+- **qa v0.8.1(短码引用定稿)**:chunk 尾部烧入 `[ref:短码]`(entry_id
+  去 qa_ 前缀取前 5 位 hex,41 条零碰撞);模型从检索结果原样搬运短码
+  调 qa_send_answer,_entry_refs 双键索引(短码+完整id)解析。
+  钩子动态词法预判整段移除——发现即持有,词法漏召/幻觉 token 两类
+  失败模式一并消失。qa v0.8.1 + platform v0.4.7 均已部署。
