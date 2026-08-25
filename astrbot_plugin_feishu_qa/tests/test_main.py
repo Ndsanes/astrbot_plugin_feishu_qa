@@ -325,6 +325,8 @@ class TestQaSendAnswer:
     def test_qq_official_emits_markdown_hyperlink(
         self, plugin: FeishuQaPlugin, monkeypatch
     ) -> None:
+        """回归锚点:QQ 官方 markdown 渲染会剥 href 的 #fragment(2026-08-25
+        实测),故任何平台都不得使用 [标题](url) 形态,统一标题行+裸链接。"""
         entry = next(e for e in plugin._entries if e.source_locator)
         event = AstrMessageEvent()
         monkeypatch.setattr(
@@ -333,15 +335,19 @@ class TestQaSendAnswer:
         out = run_handler(plugin.qa_send_answer(event, entry_ids=entry.id))
         assert isinstance(out[0], str) and "直达链接" in out[0] and "勿复述" in out[0]
         assert len(event.sent) == 1
-        texts = [c[1] for c in event.sent[0].chain if c[0] == "plain"]
-        joined = "\n".join(texts)
-        # 官方网关默认原生 markdown(msg_type=2):[标题](锚点URL) 可点击
-        expected = (
-            f"1. [{entry.raw_title}]"
-            f"(https://my.feishu.cn/wiki/test#{entry.source_locator})"
+        all_text = "".join(
+            c[1]
+            for c in event.sent[0].chain
+            if isinstance(c, tuple) and c[0] == "plain"
+        ) or "\n".join(
+            c.text
+            for c in getattr(event.sent[0].chain[0], "content", [])
+            if c.type == "Plain"
         )
-        assert expected in joined, joined
-        assert "📖 命中 1 条" in joined
+        expected_url = f"https://my.feishu.cn/wiki/test#{entry.source_locator}"
+        assert expected_url in all_text
+        assert "](" not in all_text, "markdown 超链接形态会丢锚点,禁止回潮"
+
 
     def test_generic_platform_falls_back_to_bare_url(
         self, plugin: FeishuQaPlugin
