@@ -19,7 +19,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
-from .adapter.gateway import GatewayClient
+from .adapter.gateway import DOC_FORMAT_XML, GatewayClient
 from .answer.direct import DirectAnswer
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
@@ -58,7 +58,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.7.4",
+    "0.7.5",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -177,7 +177,9 @@ class FeishuQaPlugin(Star):
 
     async def sync_once(self) -> dict:
         """抓取→解析→下载缺失图→原子提交→热替换检索器。"""
-        doc = await self.adapter.fetch_doc(fmt="xml")
+        doc = await self.adapter.fetch_doc(
+            fmt=DOC_FORMAT_XML, detail="with-ids"
+        )
         parsed = parse_xml(doc.content, source_revision=doc.revision_id)
         manifest = build_manifest(
             parsed, revision_id=doc.revision_id, document_id=doc.document_id

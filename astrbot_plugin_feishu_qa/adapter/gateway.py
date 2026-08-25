@@ -68,9 +68,11 @@ class GatewayClient:
 
     # ── 文档 ──
 
-    async def fetch_doc(self, *, fmt: str = DOC_FORMAT_MARKDOWN) -> DocContent:
-        """抓取整份文档正文(fmt: markdown/xml)。"""
-        text = await self._require().fetch_doc(self.doc_ref, fmt)
+    async def fetch_doc(
+        self, *, fmt: str = DOC_FORMAT_MARKDOWN, detail: str = "simple"
+    ) -> DocContent:
+        """抓取整份文档正文(fmt: markdown/xml;detail: simple/with-ids/full)。"""
+        text = await self._require().fetch_doc(self.doc_ref, fmt, detail)
         return DocContent(content=str(text or ""))
 
     async def append_doc_content(self, content_markdown: str) -> int:

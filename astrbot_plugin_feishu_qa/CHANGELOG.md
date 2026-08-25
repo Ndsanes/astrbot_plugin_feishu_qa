@@ -1,5 +1,14 @@
 # 更新日志
 
+## v0.7.5 (2026-08-25)
+
+### 修复
+
+- 章节直达链接退化为整篇地址的根因:lark-cli `docs +fetch` 默认
+  `--detail simple`,导出 XML **不含块 ID**,source_locator 从首次同步起
+  一直为空,链接按兜底逻辑全部指向文档根。现同步改用 `--detail with-ids`
+  (platform 网关 fetch_doc 新增 detail 透传参数),锚点真实可用。
+
 ## v0.7.4 (2026-08-25)
 
 ### 修复

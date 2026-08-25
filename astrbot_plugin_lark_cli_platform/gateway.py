@@ -171,8 +171,14 @@ class LarkGateway:
 
     # ── 文档 ──
 
-    async def fetch_doc(self, doc_ref: str, fmt: str = "markdown") -> str:
-        """拉取 wiki/docx 文档正文(user 身份)。"""
+    async def fetch_doc(
+        self, doc_ref: str, fmt: str = "markdown", detail: str = "simple"
+    ) -> str:
+        """拉取 wiki/docx 文档正文(user 身份)。
+
+        detail: simple(默认,不含块 ID) | with-ids(含 block ID,
+        可拼 文档URL#block_id 直达链接) | full。
+        """
         envelope = await self._run(
             [
                 "docs",
@@ -182,7 +188,7 @@ class LarkGateway:
                 "--doc-format",
                 fmt,
                 "--detail",
-                "simple",
+                detail,
             ],
             as_identity="user",
         )

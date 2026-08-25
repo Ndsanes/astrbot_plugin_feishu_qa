@@ -29,8 +29,10 @@ class FakeGateway:
 
     calls: list[tuple] = field(default_factory=list)
 
-    async def fetch_doc(self, doc_ref: str, fmt: str = "markdown") -> str:
-        self.calls.append(("fetch_doc", doc_ref, fmt))
+    async def fetch_doc(
+        self, doc_ref: str, fmt: str = "markdown", detail: str = "simple"
+    ) -> str:
+        self.calls.append(("fetch_doc", doc_ref, fmt, detail))
         if doc_ref not in self.fetch_results:
             raise RuntimeError(f"no such doc: {doc_ref}")
         return self.fetch_results[doc_ref]
@@ -85,7 +87,7 @@ class TestFetchDoc:
 
         doc = await client.fetch_doc()
 
-        assert ("fetch_doc", "wiki/abc", "markdown") in gw.calls
+        assert ("fetch_doc", "wiki/abc", "markdown", "simple") in gw.calls
         assert isinstance(doc, DocContent)
         assert doc.content == "# 标题\n正文"
         # 网关只回文本:revision/document_id 以 -1/"" 占位
@@ -97,7 +99,7 @@ class TestFetchDoc:
 
         await client.fetch_doc(fmt=DOC_FORMAT_XML)
 
-        assert ("fetch_doc", "w", "xml") in gw.calls
+        assert ("fetch_doc", "w", "xml", "simple") in gw.calls
 
 
 class TestDownloadMedia:

@@ -505,7 +505,12 @@ class TestSyncWithFakeGateway:
         assert result["status"] == "synced"
         assert result["image_failures"] == 0
         assert result["added"] >= 35
-        assert ("fetch_doc", "https://my.feishu.cn/wiki/test", "xml") in gw.calls
+        assert (
+            "fetch_doc",
+            "https://my.feishu.cn/wiki/test",
+            "xml",
+            "with-ids",
+        ) in gw.calls
         # 同步后检索器已热替换为快照内容
         assert plugin._retriever is not None and len(plugin._entries) >= 35
 
