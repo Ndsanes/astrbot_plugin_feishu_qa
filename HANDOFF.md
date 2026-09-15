@@ -526,3 +526,30 @@ FAQ:「连接MIDI设备」「Clip重叠」「搜索不到自带音源」。
 **连带修复**：qq_official 上 `/learn` 每轮都试图 `event.bot.api.call_action`
 （其 `bot` 是 `BotAPI`，无该方法）→ AttributeError 被兜住，行为正确但每轮刷
 一条 `读取群历史失败` 日志；现按平台判定，不做注定失败的尝试。
+
+### /学习 指令未注册别名（qa v0.8.9，2026-09-16 01:33 部署）
+
+用户发 `/学习`（引用聊天记录），机器人只回了句"学到了 记下("——**handler
+根本没执行**。
+
+**定位方法（值得复用）**：对比两次线上日志的 `star_request` 行。01:20 那次有
+`plugin -> astrbot_plugin_feishu_qa - learn`，01:29 那次**没有**——只到
+`on_group_message` 就没了，紧接着是 `ready to request llm provider`。据此可断定
+"命令过滤没过、消息流进主 Agent"，而不是 handler 内部逻辑出错。
+
+**根因**：只注册了 `@filter.command("learn")` 一个指令名，用户发的是中文
+`/学习`，命令过滤器不认；而 `on_group_message` 在群里只处理 @ 唤醒、不碰指令，
+于是整条链路静默走偏（无报错、无提示）。
+
+**修复**：`@filter.command("learn", alias={"学习"})`。`/learn`、`/学习`、
+`/学习 ok`、`/learn ok` 四种写法均可用。
+
+**实例侧核验通道**：`GET /api/v1/commands` 会列出全部指令及其 aliases/enabled，
+可直接确认注册结果——比翻日志可靠：
+```
+learn  aliases=['学习']  enabled=True  activated=True
+```
+（注意响应是 `data.items`，不是 `data.commands`。）
+
+**同类风险**：`/问` 已注册 `{"qa", "Q&A"}`，但中文名只有"问"；若日后加中文
+指令，记得同步注册别名。已加 `test_学习_alias_registered` 守卫。
