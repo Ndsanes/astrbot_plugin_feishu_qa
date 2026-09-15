@@ -655,3 +655,91 @@ class TestLearnMaterialResolution:
         run_handler(plugin.learn(self._event(big)))
         body = llm.prompts[0].split("消息记录:")[1].split("输出格式:")[0].strip()
         assert body, "超长素材被静默丢弃"
+
+
+class TestLearnConfirmFlow:
+    """`/learn ok` 确认分支(2026-09-16 线上实测暴露的解析 bug)。
+
+    线上现象:候选正常产出,但 `/learn ok` 回复"没能取到可分析的素材"。
+    根因:WakingCheckStage 在唤醒检查时**已把 wake_prefix("/")剥掉**
+    (waking_check/stage.py:130),handler 收到的是 `learn ok`,而旧
+    `_strip_command` 只认 "问" 系列前缀,剥不出 "ok" → 确认/放弃分支永不命中
+    → 一路掉进素材分析分支。已在 _strip_command 增加显式指令名参数。
+    """
+
+    def test_learn_ok_detected(self) -> None:
+        f = FeishuQaPlugin._strip_command
+        for raw in ("learn ok", "/learn ok"):
+            assert f(raw, "learn", "学习").lower() in ("ok", "确认", "yes"), raw
+
+    def test_learn_no_detected(self) -> None:
+        f = FeishuQaPlugin._strip_command
+        for raw in ("learn no", "/learn no"):
+            assert f(raw, "learn", "学习").lower() in ("no", "取消", "放弃"), raw
+
+    def test_ask_command_args(self) -> None:
+        f = FeishuQaPlugin._strip_command
+        assert f("/问 xxx", "问", "qa", "Q&A") == "xxx"
+        assert f("问 xxx", "问", "qa", "Q&A") == "xxx"
+        assert f("qa xxx", "问", "qa", "Q&A") == "xxx"
+        assert f("问 cakewalk 没声音", "问", "qa", "Q&A") == "cakewalk 没声音"
+
+    def test_bare_command_yields_empty(self) -> None:
+        f = FeishuQaPlugin._strip_command
+        assert f("learn", "learn", "学习") == ""
+        assert f("/learn", "learn", "学习") == ""
+
+    def test_plain_chat_untouched(self) -> None:
+        f = FeishuQaPlugin._strip_command
+        assert f("普通聊天", "learn", "学习") == "普通聊天"
+
+
+class TestLearnConfirmWithPending:
+    """确认分支的端到端行为(不落盘/不写回,只看分支走向)。"""
+
+    class _LLM:
+        def __init__(self, reply):
+            self.prompts = []
+            self._reply = reply
+
+        async def get_current_chat_provider_id(self, umo=None):
+            return "fake"
+
+        async def llm_generate(self, chat_provider_id=None, prompt=None):
+            self.prompts.append(prompt or "")
+            return SimpleNamespace(completion_text=self._reply)
+
+    CANDIDATE = TestLearnMaterialResolution.CANDIDATE
+
+    def test_ok_without_pending_says_so(self, plugin, monkeypatch) -> None:
+        """没有待确认候选时,ok 应提示先跑分析,而不是走素材分支。"""
+        plugin.context = self._LLM(self.CANDIDATE)
+        outs = run_handler(
+            plugin.learn(AstrMessageEvent(message_str="learn ok", sender_id="admin1"))
+        )
+        assert "没有待确认的候选" in outs[0][1]
+
+    def test_ok_with_pending_records_candidate(self, plugin, tmp_path) -> None:
+        """有候选时,ok 走收录分支(未配写回文档 → 落 pending_learn.json)。"""
+        plugin.context = self._LLM(self.CANDIDATE)
+        run_handler(
+            plugin.learn(
+                AstrMessageEvent(
+                    message_str=TestLearnMaterialResolution.TRANSCRIPT,
+                    sender_id="admin1",
+                    group_id="g1",
+                )
+            )
+        )
+        assert plugin._pending_learn, "分析阶段应产出候选"
+        outs = run_handler(
+            plugin.learn(
+                AstrMessageEvent(
+                    message_str="learn ok", sender_id="admin1", group_id="g1"
+                )
+            )
+        )
+        text = outs[0][1]
+        assert "没有待确认" not in text, f"ok 未命中确认分支: {text}"
+        assert "已收录" in text or "写回" in text
+        assert (plugin.data_root / "pending_learn.json").is_file()

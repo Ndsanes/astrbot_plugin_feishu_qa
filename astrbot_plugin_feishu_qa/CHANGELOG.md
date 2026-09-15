@@ -1,5 +1,23 @@
 # 更新日志
 
+## v0.8.8 (2026-09-16)
+
+### 修复
+
+- **`/learn ok` 确认分支从不生效**(线上实测暴露):候选能正常产出,但回复
+  `/learn ok` 会被当成"没有素材"并回一句"没能取到可分析的素材"。根因是
+  `WakingCheckStage` 在唤醒检查时**已经把 `wake_prefix("/")` 剥掉**
+  (`waking_check/stage.py:130`),handler 实际收到的是 `learn ok` 而非
+  `/learn ok`;而 `_strip_command` 只认识 "问" 系列前缀,剥不出 `ok`,
+  于是确认/放弃两个分支永不命中,一路掉进素材分析分支。现在显式传入指令名
+  解析(`_strip_command(msg, "learn", "学习")`),`/learn ok`、`learn ok`、
+  `/learn no`、`学习 ok` 均可识别;同时兼容仍带 `/` 的入口。`/问` 同批修正
+  (此前 `qa xxx` 这类别名形式剥不干净)。
+- **qq_official 每轮多一条无意义失败日志**:`/learn` 在非 aiocqhttp 平台会去
+  调 `event.bot.api.call_action`,而 qq_official 的 `bot` 是 `BotAPI`(无
+  `call_action`),抛 `AttributeError` 后被兜住——行为正确但每轮刷一条
+  `读取群历史失败` 调试日志。现按平台判定,不做注定失败的尝试。
+
 ## v0.8.7 (2026-09-16)
 
 ### 变更

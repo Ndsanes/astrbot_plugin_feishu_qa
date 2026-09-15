@@ -59,7 +59,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.7",
+    "0.8.8",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -260,7 +260,7 @@ class FeishuQaPlugin(Star):
     @filter.command("问", alias={"qa", "Q&A"})
     async def ask(self, event: AstrMessageEvent):
         """/问 <问题>:确定性直答入口(高置信不调用 LLM)。"""
-        question = self._strip_command(event.message_str)
+        question = self._strip_command(event.message_str, "问", "qa", "Q&A")
         group_id = event.get_group_id()
         router = self._router
         if router is None:
@@ -542,7 +542,7 @@ class FeishuQaPlugin(Star):
             yield event.plain_result("仅管理员可用")
             return
 
-        text = self._strip_command(event.message_str)
+        text = self._strip_command(event.message_str, "learn", "学习")
         user_id = str(event.get_sender_id())
 
         if text.lower() in ("ok", "确认", "yes"):
@@ -681,14 +681,21 @@ class FeishuQaPlugin(Star):
         return ""
 
     async def _fetch_recent_history(self, event: AstrMessageEvent) -> list[str] | None:
-        """读最近 N 条群消息文本;平台不支持返回 None。"""
+        """读最近 N 条群消息文本;仅 aiocqhttp 可用,其他平台返回 None。
+
+        qq_official 的 event.bot 是 BotAPI(无 call_action),此前会走到
+        `client.api.call_action` 并抛 AttributeError——虽被兜住,但每轮都产生
+        一条无意义的失败日志。这里先按平台判定,不做注定失败的尝试。
+        """
         limit = int(self._cfg("LEARN_CONTEXT_MESSAGES", 50))
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        if platform_name and platform_name != "aiocqhttp":
+            return None
         try:
             bot = getattr(event, "bot", None)
-            if bot is None:
-                client = self._get_aiocqhttp_client(event)
-            else:
-                client = bot
+            client = bot if bot is not None else self._get_aiocqhttp_client(event)
             if client is None:
                 return None
             result = await client.api.call_action(
@@ -843,9 +850,29 @@ class FeishuQaPlugin(Star):
     # ── 文本工具 ──
 
     @staticmethod
-    def _strip_command(message_str: str) -> str:
+    def _strip_command(message_str: str, *command_names: str) -> str:
+        """剥掉指令名,返回参数部分。
+
+        WakingCheckStage 在唤醒检查时**已经把 wake_prefix("/")剥掉**
+        (astrbot/core/pipeline/waking_check/stage.py:130),所以 handler 收到的
+        是"指令名+参数"形态(`learn ok`、`问 xxx`),而不是 `/learn ok`。
+        2026-09-16 线上实测因此踩坑:`/learn ok` 剥不出 "ok" → 确认分支永不命中
+        → 掉进素材分析分支并回复"没能取到可分析的素材"。这里显式剥指令名。
+        """
         text = (message_str or "").strip()
-        for prefix in ("/问", "问:", "问:", "问 "):
+        # 核心通常会剥掉 wake_prefix,但私聊/其他入口下可能仍带 "/",一并容错。
+        probe = text[1:].lstrip() if text.startswith("/") else text
+        for name in sorted(command_names, key=len, reverse=True):
+            if not name:
+                continue
+            if probe == name or name == text:
+                return ""
+            for candidate in (probe, text):
+                if candidate.startswith(name + " "):
+                    return candidate[len(name) + 1 :].strip()
+        if probe != text:
+            text = probe
+        for prefix in ("/问", "问:", "问 ", "问"):
             if text.startswith(prefix):
                 return text[len(prefix) :].strip()
         return text
