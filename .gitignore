@@ -10,7 +10,10 @@ dist/
 output/
 data/
 output/cakewalk/
-AstrBot/
+# 官方源码副本:锚定仓库根,避免误伤各插件 tests/stubs/astrbot/ 桩包
+# (gitignore 模式大小写不敏感,未锚定的 "AstrBot/" 曾连带忽略桩目录,
+#  导致桩改动无法用 git 恢复 —— 2026-09-16 踩过)
+/AstrBot/
 astrbot_plugin_bili_verify_feishu/
 tmp/
 .tmp_home/
