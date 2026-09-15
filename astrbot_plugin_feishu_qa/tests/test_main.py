@@ -319,6 +319,99 @@ class TestAutoFaqLinks:
         assert event.sent == []
 
 
+class TestAutoFaqLinksRelevance:
+    """自动附链的相关性闸门(2026-09-15 线上误附事故)。
+
+    线上事故:用户问"Cakewalk 的混音台怎么打开",模型检索后,插件把检索结果里
+    前三条 FAQ 直接当链接发出——分别是"连接MIDI设备""Clip重叠""搜索不到自带音源",
+    与提问毫无关系。根因是附链只顾检索顺序,而 KB 的相关度是**为该次检索词**服务的:
+    靠前的 FAQ 只说明它与"Cakewalk"同域,不代表答得上用户的问题。
+    现要求:用**用户原问题**本地判定,须同时满足 本地 MEDIUM+ 且 头部覆盖主题词。
+    """
+
+    # 事故现场:用户问混音台,模型检索返回这三个不该附链的条目
+    INCIDENT_CODES = ["c1a91", "c118a", "8a197"]
+    INCIDENT_QUESTION = "Cakewalk 的混音台怎么打开"
+
+    def _tool_result(self, codes):
+        return SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    text="".join(
+                        f"【全家桶FAQ > 章节】标题\n正文\n[ref:{c}]\n相关度: 1.00\n\n"
+                        for c in codes
+                    )
+                )
+            ]
+        )
+
+    def _tool(self, name="astr_kb_search"):
+        return SimpleNamespace(name=name)
+
+    def _send(self, plugin, question, codes):
+        event = AstrMessageEvent(message_str=question)
+        run_handler(
+            plugin.auto_send_faq_links(
+                event, self._tool(), None, self._tool_result(codes)
+            )
+        )
+        return event
+
+    @staticmethod
+    def _sent_text(event) -> str:
+        """取已发消息的文本:兼容 合并转发(Node) 与 普通链 两种形态。"""
+        parts = []
+        for chain in event.sent:
+            for item in chain.chain:
+                if isinstance(item, tuple) and item[0] == "plain":
+                    parts.append(item[1])
+                elif getattr(item, "content", None):
+                    parts.extend(
+                        c.text for c in item.content if getattr(c, "text", None)
+                    )
+        return "\n".join(parts)
+
+    def test_incident_question_sends_no_links(self, plugin) -> None:
+        """问混音台时,不得把"连接MIDI设备/Clip重叠/自带音源"当答案附上。"""
+        event = self._send(plugin, self.INCIDENT_QUESTION, self.INCIDENT_CODES)
+        assert event.sent == [], (
+            "无关条目被当作直达章节发出:"
+            + str([e.raw_title for e in plugin._entries])
+        )
+
+    def test_mixed_candidates_only_relevant_survives(self, plugin) -> None:
+        """候选中混入真相关条目时,只附相关的那个。"""
+        event = self._send(
+            plugin, "cakewalk 怎么登录激活", ["c1a91", "63591", "c118a"]
+        )
+        assert len(event.sent) == 1
+        joined = self._sent_text(event)
+        assert "登录激活" in joined
+        assert "Clip重叠" not in joined and "先按这边操作" not in joined
+
+    def test_links_sorted_by_relevance_not_retrieval_order(self, plugin) -> None:
+        """检索顺序可能把边缘条目排前面;输出须按本地相关度降序。"""
+        # 两个都真相关,但**传入顺序相反**;两种输入都应得到同一输出顺序,
+        # 证明排序依据是相关度而非检索顺序。
+        for codes in (["53903", "63591"], ["63591", "53903"]):
+            event = self._send(plugin, "cakewalk 怎么登录激活", codes)
+            joined = self._sent_text(event)
+            assert "如何登录激活" in joined and "无法激活" in joined
+            assert joined.index("如何登录激活") < joined.index("无法激活"), (
+                f"附链未按相关度降序排列(input={codes})"
+            )
+
+    def test_question_without_topic_words_still_links(self, plugin) -> None:
+        """纯领域词提问(无主题词)时闸门不生效,避免把正常提问一律拒绝。"""
+        event = self._send(plugin, "cakewalk", ["63591", "8a197"])
+        assert len(event.sent) == 1, "无主题词的正常提问不应被误拦"
+
+    def test_no_question_falls_back_without_crash(self, plugin) -> None:
+        """事件无正文时无法判定,退化为按检索顺序截断(不得异常)。"""
+        event = self._send(plugin, "", ["63591"])
+        assert len(event.sent) == 1
+
+
 class TestAdminCommands:
     def test_status_denies_non_admin(self, plugin: FeishuQaPlugin) -> None:
         event = AstrMessageEvent(sender_id="nobody")

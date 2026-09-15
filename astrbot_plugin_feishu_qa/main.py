@@ -37,6 +37,9 @@ from .storage.snapshot import SnapshotStore
 PLUGIN_NAME = "astrbot_plugin_feishu_qa"
 DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 
+# 单轮自动附链上限:链接是承诺不是列表,多则刷屏且冲淡主答案。
+_MAX_AUTO_LINKS = 3
+
 # FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
 _FAQ_CITATION_GUIDANCE = (
     "\n[FAQ 引用规范] 知识库结果分两类:"
@@ -54,7 +57,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.5",
+    "0.8.6",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -411,6 +414,16 @@ class FeishuQaPlugin(Star):
 
         确定性投递:解析检索结果里的 [ref:短码],不依赖模型自觉调用工具;
         同一轮会话内已发过的条目自动去重。单次最多附 3 条防刷屏。
+
+        **附链是对用户的承诺**("你的问题在这里有答案"),因此不能照抄检索顺序:
+        2026-09-15 实测,用户问"Cakewalk 的混音台怎么打开",模型检索后把
+        检索结果里前三条 FAQ(ref:c1a91/c118a/8a197——分别是"连接MIDI设备"
+        "Clip重叠""搜索不到自带音源")当链接发出,与提问毫无关系。根因是
+        KB 检索的相关度是**为该次检索词**服务的,靠前的 FAQ 只说明它和
+        "Cakewalk"同域,不代表答得上用户的问题。现改为用**用户原问题**做
+        一次本地确定性判定,沿用与 Tier 0 直答同一套证据标准(本地 MEDIUM+
+        且头部覆盖主题词),不达标就不附链——宁可少一条链接,也不把无关
+        章节塞给用户。零 LLM、零网络,仍是纯本地计算。
         """
         if getattr(tool, "name", "") != "astr_kb_search" or tool_result is None:
             return
@@ -420,16 +433,28 @@ class FeishuQaPlugin(Star):
             )
         except Exception:
             return
-        codes = list(dict.fromkeys(re.findall(r"\[ref:([a-z0-9]{5})\]", text)))[:3]
-        sent = set(event.get_extra("_faq_links_sent") or ())
-        new_entries = []
+        codes = list(dict.fromkeys(re.findall(r"\[ref:([a-z0-9]{5})\]", text)))
+        candidates = []
         for code in codes:
             entry = self._entry_refs.get(code)
-            if entry is not None and entry.id not in sent:
-                sent.add(entry.id)
-                new_entries.append(entry)
+            if entry is not None:
+                candidates.append(entry)
+        if not candidates:
+            return
+        # 判定基准是用户原问题(剥掉 @唤醒),不是模型的检索词。
+        question = self._strip_wake(getattr(event, "message_str", "") or "")
+        retriever = self._retriever
+        if retriever is not None and question:
+            candidates = retriever.linkable_entries(
+                question, candidates, max_n=_MAX_AUTO_LINKS
+            )
+        else:
+            candidates = candidates[:_MAX_AUTO_LINKS]
+        sent = set(event.get_extra("_faq_links_sent") or ())
+        new_entries = [e for e in candidates if e.id not in sent]
         if not new_entries:
             return
+        sent.update(e.id for e in new_entries)
         platform_name = ""
         with contextlib.suppress(Exception):
             platform_name = str(event.get_platform_name() or "")

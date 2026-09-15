@@ -164,6 +164,47 @@ class Retriever:
         """条目头部是否覆盖到任一"主题词"(区分度达标的查询词项)。"""
         return bool(discriminative & self._head_terms[index])
 
+    def topic_words(self, query: str) -> set[str]:
+        """查询中的"主题词"——真正带意图、能区分条目的词项(见 §主题词支撑闸门)。"""
+        return {
+            t
+            for t in extract_terms(query.lower())
+            if len(t) >= 2 and self.term_idf(t) >= DISCRIMINATIVE_MIN_IDF
+        }
+
+    def supports_query(self, entry: QaEntry, query: str) -> bool:
+        """条目头部(症状标签/标题/分类)是否覆盖查询的主题词。
+
+        与 search 的闸门同源:查询本身没有主题词时闸门不生效(返回 True),
+        避免"cakewalk"这类纯领域词提问被一律拒绝。
+        """
+        discriminative = self.topic_words(query)
+        if not discriminative:
+            return True
+        return bool(discriminative & head_terms(entry))
+
+    def linkable_entries(
+        self, query: str, entries: list[QaEntry], *, max_n: int = 3
+    ) -> list[QaEntry]:
+        """从候选中挑出"值得附直达链接"的条目,按相关度降序。
+
+        附链是**承诺**(告诉用户"你的问题在这里有答案"),因此须与 Tier 0 直答
+        用同一套证据标准:①本地判定 MEDIUM 以上;②头部覆盖到查询主题词。
+        缺任一即不附——宁可少一条链接,也不把无关章节塞给用户。
+        """
+        scored = {r.entry.id: r for r in self.search(query, top_k=len(self.entries))}
+        picked: list[tuple[float, QaEntry]] = []
+        for entry in entries:
+            result = scored.get(entry.id)
+            if result is None or result.confidence == Confidence.LOW:
+                continue
+            if not self.supports_query(entry, query):
+                continue
+            picked.append((result.score, entry))
+        picked.sort(key=lambda pair: pair[0], reverse=True)
+        return [entry for _, entry in picked[:max_n]]
+
+
     def search(self, query: str, *, top_k: int = 3) -> list[SearchResult]:
         """返回按分数降序的前 top_k 条(spec §20:最多 3,通常取第 1)。"""
         if not query.strip():
