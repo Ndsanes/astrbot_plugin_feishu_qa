@@ -693,6 +693,22 @@ class TestLearnConfirmFlow:
         f = FeishuQaPlugin._strip_command
         assert f("普通聊天", "learn", "学习") == "普通聊天"
 
+    def test_学习_alias_registered(self) -> None:
+        """`/学习` 必须是 learn 的别名。
+
+        线上实测(01:29):用户发 `/学习`,但当时只注册了 `learn` 一个指令名,
+        命令过滤器不认 → handler 从未触发 → 消息流进 LLM,机器人只回了句
+        "学到了 记下("。而 `on_group_message` 在群里只处理 @ 唤醒,不管指令,
+        所以整条链路静默走偏。
+        """
+        meta = getattr(FeishuQaPlugin.learn, "_filter", None)
+        assert meta is not None, "learn 未注册为指令"
+        kind, args, kwargs = meta
+        assert kind == "command"
+        names = {args[0]} | set(kwargs.get("alias") or set())
+        assert "学习" in names, f"/学习 未注册为别名(当前: {names})"
+        assert "learn" in names
+
 
 class TestLearnConfirmWithPending:
     """确认分支的端到端行为(不落盘/不写回,只看分支走向)。"""

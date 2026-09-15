@@ -59,7 +59,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.8",
+    "0.8.9",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -535,9 +535,9 @@ class FeishuQaPlugin(Star):
         yield event.plain_result("语料已重新加载" if ok else "语料加载失败")
 
 
-    @filter.command("learn")
+    @filter.command("learn", alias={"学习"})
     async def learn(self, event: AstrMessageEvent):
-        """/learn:分析最近群聊,提取候选 QA(管理员;确认后才生效)。"""
+        """/learn(或 /学习):分析最近群聊,提取候选 QA(管理员;确认后才生效)。"""
         if not self._is_admin(event):
             yield event.plain_result("仅管理员可用")
             return
