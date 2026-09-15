@@ -384,3 +384,57 @@ download_media/auth_*)此前不传 bin_path、依赖环境 PATH——容器内�
   /问 与群内 @ 同步生效;零 LLM 与 stop_event 阻断不变。基线 240。
 - **qa v0.8.4(文案定稿)**:直达链接列表头/来源署名按用户定稿精简
   ("直接命中 N 条肖闻的解答" / " > Xiaowenn《有福同享全家桶Q&A汇总》")。
+
+## 双故障排障轮（qa v0.8.5，2026-09-15）
+
+用户反馈一次群聊里两个独立故障：先被"直接命中 1 条肖闻的解答"（内容不相干——
+问混音台却答登录激活），随后改走知识库又连续两次 `astr_kb_search execution
+timeout after 20 seconds`。根因彼此无关，各自修复。
+
+### 故障 1：Tier 0 领域高频词误命中（代码修复）
+
+`cakewalk sonar的混音台在哪` 打到 6.59 分直答【如何登录激活】——实例生产阈值
+就是 6.5（非代码默认 9.0）。全篇文档都在 Cakewalk 语境，"cakewalk/sonar"两个
+满语料高频词把**每条目一起抬高**却不区分任何条目（实测 idf 仅 0.14/0.26），
+而真正携带意图的"混音台"在全语料零命中（idf 0.82）。于是硬答一条不相干的，
+还把主 Agent 挡在门外（stop_event）。
+
+**修复**：`retrieval/scorer.py` 引入**主题词支撑闸门**——按 IDF 识别查询中的
+"主题词"（≥0.35，排除满语料领域词），条目若在 症状标签/标题/分类 三处都覆盖
+不到任一主题词，分数 ×0.3 压回低分区交还主 Agent。门槛 0.35 取自 r8268/r8394
+两份语料的稳定平台期（0.30~0.35 行为一致）。校准：20 真实 query 判定完全不变
+（直答 17/20，正确条目被惩罚数 0/20），4 条负例零泄漏，误命中 6.59→1.98(LOW)。
+新增 `TestTopicSupportGate` 四用例，其中阈值用**生产值 6.5** 回归（代码默认 9.0
+掩盖过这个 bug，必须用线上真值测）。根套件 244 passed / ruff 绿。
+
+### 故障 2：KB rerank 超时（实例配置修复，未改代码）
+
+`tool_call_timeout=20`s，而 Moark Qwen3-Reranker-8B 实测 30–52s（与文档数无关，
+1 条 doc 也要 36s）→ 每次检索必然超时。**同模型在 SiliconFlow 只要 0.3–0.7s**。
+已在实例新建 provider `Siliconflow Qwen3-Reranker-8B`
+（`https://api.siliconflow.cn/v1` + `/rerank`，复用 bge-m3 的 key），
+绑定到「Cakewalk sonar」KB（原「音频软件全家桶 FAQ」本无 reranker）。
+整链路 21.9s → 2.1s，且 top-1 正确命中 Console view 章节。
+
+### 踩坑（重要）
+
+1. **改 provider 配置会静默毒死 KB 的 rerank**：`PUT /api/v1/providers/by-id`
+   重建 provider 实例（旧实例被 terminate → `client=None`），但 KBHelper 的
+   vec_db 仍持旧引用 → 之后每次 retrieve 都 "Rerank 执行失败，已跳过重排序"，
+   异常文本为空（正是 vllm_rerank_source 的 `assert self.client is not None`）。
+   症状：排序静默退化为融合结果 + 检索突然快得反常（<1s）。**修复**：改完
+   provider 必须对每个绑定它的 KB 发一次 `PUT /api/v1/knowledge-bases/{kb_id}`
+   触发 KBHelper 重建。本轮即踩中并修复。
+2. `PUT /api/v1/providers/by-id` 载荷必须带 `provider_id`，否则 400
+   "Missing key: provider_id"。
+3. `POST /api/v1/providers/{id}/test` 对 vllm_rerank 是 lazy 判定——Moark 明明
+   能跑却报 `unavailable`，不能当健康判据。
+4. 该 KB 的 FAQ 语料**确实没有**混音台条目（实测 "混音台" 检索 top-1 是轨道视图
+   条目）——所以正确答案本来就该由 Agent 结合用户手册（Console view / Alt+2）
+   给出，Tier 0 正确地选择了不抢答。
+
+### 部署
+
+zip 通道（DELETE → upload，`delete_config:false`/`delete_data:false` 保配置与
+语料），实例 v0.8.5 / activated / failed 空 / 语料 45 entries 完好、配置
+HIGH_CONFIDENCE_THRESHOLD=6.5 原样保留。dist 旧 zip 已清理。
