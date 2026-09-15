@@ -8,10 +8,13 @@ import pytest
 
 from astrbot_plugin_feishu_qa.corpus.parser import parse_xml
 from astrbot_plugin_feishu_qa.learn.candidate import (
+    MAX_HISTORY_CHARS,
     build_learn_prompt,
     candidate_to_pending_record,
+    extract_transcript,
     find_duplicate,
     format_candidate_display,
+    is_chat_record_transcript,
     parse_candidate,
 )
 from astrbot_plugin_feishu_qa.retrieval.scorer import Retriever
@@ -93,3 +96,58 @@ class TestDisplayAndRecord:
         )
         assert record["learned_from_group"] == "g1"
         assert record["approved_by"] == "admin1"
+
+
+class TestPromptBudget:
+    """/learn 素材预算:超长单条不得被静默丢弃。
+
+    旧实现"放不下就 break",遇到一条超过 MAX_HISTORY_CHARS 的素材(如整段
+    合并转发转录)会整条丢弃 → prompt 素材区为空 → 模型无从判断,是静默失败。
+    """
+
+    def test_oversized_single_blob_is_kept_head_and_tail(self) -> None:
+        blob = "HEAD" + ("中" * 9000) + "TAIL"
+        prompt = build_learn_prompt([blob])
+        body = prompt.split("消息记录:")[1].split("输出格式:")[0]
+        assert "HEAD" in body and "TAIL" in body, "超长素材被整条丢弃"
+        assert "省略" in body, "截断处应显式标注,避免模型误当对话结束"
+
+    def test_budget_respected(self) -> None:
+        prompt = build_learn_prompt(["x" * 9000])
+        body = prompt.split("消息记录:")[1].split("输出格式:")[0].strip()
+        assert len(body) <= MAX_HISTORY_CHARS + 80
+
+    def test_multiple_lines_still_capped(self) -> None:
+        prompt = build_learn_prompt(["x" * 500] * 20)
+        assert len(prompt) < 6000
+
+
+class TestChatRecordTranscript:
+    """QQ 官方机器人的"聊天记录"转录识别(message_type=102)。
+
+    平台在服务端把合并转发展开成纯文本随 content 下发,故 plugin 拿
+    events.message_str 即为完整转录,无需解析任何转发组件。
+    """
+
+    REAL_LOG = (
+        "[At:qq_official] [群聊的聊天记录]\n"
+        "=== 消息 1 ===\n[消息内容]  我去\n[发送者] ㅤㅤㅤ\n"
+        "=== 消息 2 ===\n[消息内容] 61键1100左右\n[发送者] 小闻鸭鸭鸭鸭\n"
+    )
+
+    def test_detects_real_transcript(self) -> None:
+        assert is_chat_record_transcript(self.REAL_LOG) is True
+
+    def test_extract_strips_at_prefix(self) -> None:
+        body = extract_transcript(self.REAL_LOG)
+        assert body.startswith("[群聊的聊天记录]")
+        assert "[At:qq_official]" not in body
+        assert "=== 消息 1 ===" in body
+
+    def test_plain_chat_not_treated_as_transcript(self) -> None:
+        assert is_chat_record_transcript("cakewalk 的混音台怎么打开") is False
+        assert is_chat_record_transcript("") is False
+
+    def test_merged_forward_without_header_still_detected(self) -> None:
+        """有些客户端不带 [群聊的聊天记录] 头,只给 === 消息 N === 分节。"""
+        assert is_chat_record_transcript("=== 消息 1 ===\n[消息内容] hi") is True

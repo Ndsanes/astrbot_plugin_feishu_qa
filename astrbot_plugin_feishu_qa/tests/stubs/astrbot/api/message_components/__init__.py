@@ -45,3 +45,15 @@ class Node:
 
 class Nodes(Node):
     pass
+
+
+class Reply:
+    """引用消息段。真实字段见 astrbot.core.message.components.Reply。"""
+
+    type = "Reply"
+
+    def __init__(self, id="", chain=None, message_str="", text="", **k):
+        self.id = id
+        self.chain = chain or []
+        self.message_str = message_str
+        self.text = text

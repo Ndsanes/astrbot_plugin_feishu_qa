@@ -27,8 +27,10 @@ from .corpus.parser import parse_xml
 from .learn.candidate import (
     build_learn_prompt,
     candidate_to_pending_record,
+    extract_transcript,
     find_duplicate,
     format_candidate_display,
+    is_chat_record_transcript,
     parse_candidate,
 )
 from .retrieval.scorer import Retriever
@@ -57,7 +59,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.6",
+    "0.8.7",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -575,11 +577,14 @@ class FeishuQaPlugin(Star):
             yield event.plain_result("已放弃。" if dropped else "没有待确认的候选。")
             return
 
-        # 1) 取最近群聊历史(aiocqhttp 专属能力,失败即告知)
-        history_texts = await self._fetch_recent_history(event)
+        # 1) 取素材:聊天记录转录 > 引用消息 > 平台历史(见 _collect_learn_material)
+        history_texts, source_note = await self._collect_learn_material(event, text)
         if history_texts is None:
             yield event.plain_result(
-                "当前平台不支持读取群历史消息,/learn 仅在 aiocqhttp 下可用。"
+                "没能取到可分析的素材。可以这样用:\n"
+                "① 把群里的问答「合并转发」到群里,再引用它发 /学习;\n"
+                "② 直接引用某条回答发 /学习;\n"
+                "③(仅 aiocqhttp)直接 /学习 分析最近群聊。"
             )
             return
         if not history_texts:
@@ -603,7 +608,9 @@ class FeishuQaPlugin(Star):
         # 3) 严格解析 + 查重
         candidate = parse_candidate(raw or "")
         if candidate is None:
-            yield event.plain_result("最近的群聊中没有值得加入 FAQ 的新问答。")
+            yield event.plain_result(
+                f"这份素材({source_note})里没有值得加入 FAQ 的新问答。"
+            )
             return
 
         duplicate = find_duplicate(candidate, self._retriever) if self._retriever else None
@@ -615,7 +622,63 @@ class FeishuQaPlugin(Star):
             return
 
         self._pending_learn[user_id] = candidate
-        yield event.plain_result(format_candidate_display(candidate))
+        yield event.plain_result(
+            f"[素材来源: {source_note}]\n{format_candidate_display(candidate)}"
+        )
+
+    async def _collect_learn_material(
+        self, event: AstrMessageEvent, text: str
+    ) -> tuple[list[str] | None, str]:
+        """按可靠性优先级收集 /learn 的分析素材。
+
+        实测(2026-09-16)三条来源的可用性与质量:
+
+        1. **聊天记录转录**(最优):官方 QQ 机器人在**服务端**就把合并转发展开成
+           纯文本(message_type=102,[群聊的聊天记录] + === 消息 N === + [发送者]),
+           随 content 一起下发,所以插件无需任何转发组件解析,`message_str` 即完整
+           转录。素材由转发者人工筛选,信噪比远高于"最近 N 条闲聊",且自带发送者。
+        2. **引用消息**:取被引用内容及本条的正文(被引用内容在 Reply 组件的
+           message_str/chain 上)。适合"引用某人的回答 → /学习"。
+        3. **平台历史**(aiocqhttp 专属):`get_group_msg_history`,其他平台不可用。
+
+        返回 (素材列表, 来源说明);都取不到时素材为 None。
+        """
+        # 1) 本条消息本身就是一份聊天记录转录
+        if is_chat_record_transcript(text):
+            return [extract_transcript(text)], "聊天记录转录"
+
+        # 2) 引用消息:被引用的内容 + 本条附带说明
+        quoted = self._extract_quoted_text(event)
+        if quoted:
+            material = [quoted]
+            if text.strip():
+                material.append(text.strip())
+            return material, "引用消息"
+
+        # 3) 平台历史回退
+        history_texts = await self._fetch_recent_history(event)
+        if history_texts:
+            return history_texts, "最近群聊历史"
+        return None, ""
+
+    def _extract_quoted_text(self, event: AstrMessageEvent) -> str:
+        """取出本条消息引用的内容(纯文本);无引用或取不到返回空串。"""
+        for comp in event.get_messages() or []:
+            if getattr(comp, "type", "") != "Reply":
+                continue
+            direct = str(getattr(comp, "message_str", "") or "").strip()
+            if direct:
+                return direct
+            chain = getattr(comp, "chain", None) or []
+            parts = [
+                str(getattr(c, "text", "") or "")
+                for c in chain
+                if getattr(c, "text", None)
+            ]
+            joined = " ".join(p for p in parts if p).strip()
+            if joined:
+                return joined
+        return ""
 
     async def _fetch_recent_history(self, event: AstrMessageEvent) -> list[str] | None:
         """读最近 N 条群消息文本;平台不支持返回 None。"""

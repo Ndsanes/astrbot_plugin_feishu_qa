@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 from astrbot.api.event import AstrMessageEvent  # 桩包(或真实包)
+from astrbot.api.message_components import Reply
 
+from astrbot_plugin_feishu_qa.learn.candidate import MAX_HISTORY_CHARS
 from astrbot_plugin_feishu_qa.main import FeishuQaPlugin
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -557,3 +559,99 @@ class TestSyncWithFakeGateway:
         assert result2["status"] == "synced", "缺图时不得快速返回 unchanged"
         redownloaded = len([c for c in gw.calls if c[0] == "download_media"])
         assert redownloaded > calls_before, "必须重新发起图片下载"
+
+
+class TestLearnMaterialResolution:
+    """/learn 素材取用优先级(2026-09-16)。
+
+    实测确认:官方 QQ 机器人在**服务端**就把合并转发展开成纯文本
+    (message_type=102,[群聊的聊天记录] + === 消息 N === + [发送者]),
+    随 content 下发,所以插件拿 message_str 即完整转录——这条路既
+    不需要开 group_message_history_enable,也不落额外存储。
+    优先级:聊天记录转录 > 引用消息 > 平台历史(aiocqhttp 专属)。
+    """
+
+    TRANSCRIPT = (
+        "[At:qq_official] [群聊的聊天记录]\n"
+        "=== 消息 1 ===\n[消息内容] 混音台怎么开\n[发送者] 群友A\n\n"
+        "=== 消息 2 ===\n[消息内容] 顶部菜单 视图→控制台,或按 Alt+2\n[发送者] 小闻\n"
+    )
+
+    CANDIDATE = (
+        '{"is_candidate": true, "question": "混音台怎么打开",'
+        ' "answer": "顶部菜单 视图→控制台,或按 Alt+2",'
+        ' "symptom_tags": ["混音台"], "category": "unknown",'
+        ' "evidence": ["群友A: 混音台怎么开"], "confidence": 0.9}'
+    )
+
+    class _LLM:
+        """记录 prompt 的假 LLM:断言素材是否真的喂进去了。"""
+
+        def __init__(self, reply):
+            self.prompts: list[str] = []
+            self._reply = reply
+
+        async def get_current_chat_provider_id(self, umo=None):
+            return "fake"
+
+        async def llm_generate(self, chat_provider_id=None, prompt=None):
+            self.prompts.append(prompt or "")
+            return SimpleNamespace(completion_text=self._reply)
+
+    @pytest.fixture()
+    def learned(self, plugin: FeishuQaPlugin):
+        llm = self._LLM(self.CANDIDATE)
+        plugin.context = llm
+        return plugin, llm
+
+    def _event(self, message_str, messages=None, sender_id="admin1"):
+        """管理员事件:plugin fixture 的 ADMIN_USERS 是 ["admin1"]。"""
+        return AstrMessageEvent(
+            message_str=message_str, sender_id=sender_id, messages=messages
+        )
+
+    def test_transcript_is_used_without_history_api(self, learned) -> None:
+        """核心断言:转录直接进 prompt,不依赖 aiocqhttp 历史接口。"""
+        plugin, llm = learned
+        outs = run_handler(plugin.learn(self._event(self.TRANSCRIPT)))
+        assert llm.prompts, "未调用 LLM"
+        assert "视图→控制台" in llm.prompts[0], "转录内容没有进入 prompt"
+        assert "素材来源: 聊天记录转录" in outs[0][1]
+
+    def test_quoted_message_used_when_no_transcript(self, learned) -> None:
+        """引用路径:被引用内容作为素材。"""
+        plugin, llm = learned
+        quote = Reply(message_str="导出报错就换成 44.1kHz 再导一次")
+        event = self._event("/learn", messages=[quote])
+        outs = run_handler(plugin.learn(event))
+        assert llm.prompts and "44.1kHz" in llm.prompts[0]
+        assert "素材来源: 引用消息" in outs[0][1]
+
+    def test_no_material_gives_actionable_hint(self, learned) -> None:
+        """三条路都取不到时,必须给出可操作的用法提示(而非死胡同)。"""
+        plugin, llm = learned
+        outs = run_handler(plugin.learn(self._event("/learn")))
+        text = outs[0][1]
+        assert "合并转发" in text and "引用" in text
+        assert not llm.prompts, "无素材时不应调用 LLM"
+
+    def test_non_admin_rejected(self, learned) -> None:
+        plugin, llm = learned
+        outs = run_handler(plugin.learn(self._event(self.TRANSCRIPT, sender_id="nobody")))
+        assert "仅管理员" in outs[0][1]
+        assert not llm.prompts
+
+    def test_long_transcript_not_silently_dropped(self, learned) -> None:
+        """超长转录(>4000 字)曾是静默失败:prompt 素材区为空。"""
+        plugin, llm = learned
+        big = (
+            "[群聊的聊天记录]\n"
+            + "\n".join(
+                f"=== 消息 {i} ===\n[消息内容] 问题内容{i}\n[发送者] 群友{i}"
+                for i in range(1, 130)
+            )
+        )
+        assert len(big) > MAX_HISTORY_CHARS
+        run_handler(plugin.learn(self._event(big)))
+        body = llm.prompts[0].split("消息记录:")[1].split("输出格式:")[0].strip()
+        assert body, "超长素材被静默丢弃"
