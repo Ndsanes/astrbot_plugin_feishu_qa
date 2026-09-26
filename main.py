@@ -100,7 +100,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.9",
+    "0.9.10",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -735,8 +735,12 @@ class FeishuQaPlugin(Star):
         if not event.is_at_or_wake_command:
             return
         text = self._strip_wake(event.message_str)
-        if not text or text.startswith(("/问", "/qa")):
-            return  # 指令路径交给 command handler
+        if not text or text.startswith("/"):
+            # 任何 `/` 开头的都是指令(含别名),一律交给 command handler。
+            # 原先只放过 /问 与 /qa,导致 /jev_probe、/qa_sync、/learn 等被
+            # @ 之后仍被当成提问送进判定链路——线上实测 /jev_probe 文本里的
+            # "midi 键盘怎么连" 真的被判成提问并触发了 Jev。
+            return
         router = self._router
         if router is None:
             return

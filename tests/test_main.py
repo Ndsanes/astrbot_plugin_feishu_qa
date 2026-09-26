@@ -769,3 +769,35 @@ class TestLearnConfirmWithPending:
         assert "没有待确认" not in text, f"ok 未命中确认分支: {text}"
         assert "已收录" in text or "写回" in text
         assert (plugin.data_root / "pending_learn.json").is_file()
+
+
+class TestCommandTextNotTreatedAsQuestion:
+    """指令路径守卫:任何 `/` 开头的文本都不得被当成提问送进判定链路。
+
+    线上实测(2026-09-27):`/jev_probe midi 键盘怎么连 cakewalk` 被 @ 之后走的是
+    `on_group_message` 而非命令处理器,探针文本里的 "midi 键盘怎么连" 被判成
+    真实提问并触发了 Jev——恰好答对是运气。原守卫只放过 /问 与 /qa。
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "/jev_probe midi 键盘怎么连", "/qa_sync", "/qa_reload",
+            "/learn", "/学习 ok", "/qa_status",
+        ],
+    )
+    def test_slash_prefixed_text_returns_without_routing(
+        self, plugin: FeishuQaPlugin, text: str
+    ) -> None:
+        event = AstrMessageEvent(message_str=text)
+        event.is_at_or_wake_command = True
+        run_handler(plugin.on_group_message(event))
+        assert event.sent == [], f"{text} 不应被当成提问投递"
+        assert event.stopped is False
+
+    def test_normal_question_still_routed(self, plugin: FeishuQaPlugin) -> None:
+        event = AstrMessageEvent(message_str="cakewalk没声音怎么办")
+        event.is_at_or_wake_command = True
+        run_handler(plugin.on_group_message(event))
+        assert len(event.sent) == 1, "普通提问仍应走直答"
+        assert event.stopped is True

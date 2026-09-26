@@ -261,13 +261,16 @@ class TestTentativeLinks:
     def _entries(self, entries, n=2):
         return entries[:n]
 
-    def test_header_is_hedged(self, entries) -> None:
+    def test_header_states_relation_not_answer(self, entries) -> None:
         ans = format_tentative_links(
             self._entries(entries), url_of=lambda e: "http://x", markdown=False
         )
         assert TENTATIVE_HEADER in ans.text
-        # 断言词一个都不能出现
-        for banned in ("找到", "直接命中", "解答"):
+        # 不得声称"这就是答案"(9·15 事故形态)
+        for banned in ("找到", "直接命中", "解答", "以下是你要的答案"):
+            assert banned not in ans.text
+        # 也不得加免责话术:安全由 Jev 置信闸门负责,文案只管表达
+        for banned in ("仅供参考", "不一定是答案", "不保证", "请以实际为准"):
             assert banned not in ans.text
 
     def test_no_body_text_no_images(self, entries) -> None:

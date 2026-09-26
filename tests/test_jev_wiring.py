@@ -152,7 +152,7 @@ class TestHookC:
         _run(p.on_group_message(ev))
         assert len(ev.sent) == 1, "Jev 判定够格就必须自己答"
         assert ev.stopped is True, "自己答了必须阻断主 Agent"
-        assert "可能与你的问题相关" in _sent_text(ev)
+        assert "以下章节与你的问题相关" in _sent_text(ev)
         assert len(calls) == 1, "应只发一次 Jev 调用(一次并行求值全部问题)"
 
     def test_jev_says_synthesis_hands_off(self, make_plugin, monkeypatch) -> None:
