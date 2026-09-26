@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 from ..corpus.model import QaEntry
@@ -21,6 +23,18 @@ class Confidence:
 # 经 20 真实 query + 负例校准的默认阈值(可在配置中覆盖)
 DEFAULT_HIGH_THRESHOLD = 9.0
 DEFAULT_MEDIUM_THRESHOLD = 3.0
+
+# 主题词支撑闸门(2026-09-15)。线上实测:"cakewalk sonar的混音台在哪"曾以 6.59
+# 直答【如何登录激活】——因为整篇文档都是 Cakewalk 语境,"cakewalk/sonar"这两个
+# 满语料高频词足以把任意条目顶过阈值,而真正携带意图的"混音台"在全语料零命中。
+# 度量:词项的语料 IDF(越低越常见)。查询中 IDF 高于门槛的词项视为"主题词";
+# 若条目连一个主题词都不覆盖(标题/症状标签/分类三处皆无),说明它只是共享了
+# 领域高频词,不构成对本次提问的支撑 → 分数乘以惩罚系数压回低分区。
+# 门槛 0.35 取自 r8268/r8394 两份语料的稳定平台期(0.30~0.35 行为一致);
+# 校准数据:20 真实 query 全数保持原分数与原判定(直答 17/20 不变),
+# 4 条负例零泄漏,而误命中由 6.59 降至 1.98。
+DISCRIMINATIVE_MIN_IDF = 0.35
+UNSUPPORTED_PENALTY = 0.3
 
 _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 _TOKEN_SPLIT_RE = re.compile(r"[^0-9a-zA-Z\u4e00-\u9fff]+")
@@ -106,6 +120,16 @@ def score_entry(entry: QaEntry, terms: set[str], query_lower: str) -> float:
     return score
 
 
+def head_terms(entry: QaEntry) -> set[str]:
+    """条目的"头部"词项:症状标签 + 标题 + 分类。
+
+    与正文分开,是因为判定"这条是否真的在讲用户问的东西"应看标题语义,
+    而非正文里偶然出现的词(正文权重低,却足以撑起共享领域词)。
+    """
+    head = " ".join(entry.symptom_tags) + " " + entry.raw_title + " " + entry.category
+    return extract_terms(head.lower())
+
+
 class Retriever:
     """确定性检索器。持有不可变快照条目;线程安全(只读)。"""
 
@@ -119,6 +143,67 @@ class Retriever:
         self.entries = entries
         self.high_threshold = high_threshold
         self.medium_threshold = medium_threshold
+        # 语料级统计:文档频次(条目正文+标题+分类全文),用于算词项 IDF。
+        # 一次性构建(语料仅在同步后重建),检索路径只做查表。
+        self._df: Counter[str] = Counter()
+        for entry in entries:
+            blob = (entry.raw_title + " " + entry.category + " " + entry.body).lower()
+            for term in extract_terms(blob):
+                self._df[term] += 1
+        self._head_terms: list[set[str]] = [head_terms(e) for e in entries]
+        self._idf_denom = math.log(len(entries) + 1) if entries else 0.0
+
+    def term_idf(self, term: str) -> float:
+        """词项区分度:1.0 = 语料中独有,趋近 0 = 到处都是。未出现的词按最稀有算。"""
+        if self._idf_denom <= 0:
+            return 0.0
+        df = self._df.get(term, 0)
+        return math.log((len(self.entries) + 1) / (df + 1)) / self._idf_denom
+
+    def _is_supported(self, index: int, discriminative: set[str]) -> bool:
+        """条目头部是否覆盖到任一"主题词"(区分度达标的查询词项)。"""
+        return bool(discriminative & self._head_terms[index])
+
+    def topic_words(self, query: str) -> set[str]:
+        """查询中的"主题词"——真正带意图、能区分条目的词项(见 §主题词支撑闸门)。"""
+        return {
+            t
+            for t in extract_terms(query.lower())
+            if len(t) >= 2 and self.term_idf(t) >= DISCRIMINATIVE_MIN_IDF
+        }
+
+    def supports_query(self, entry: QaEntry, query: str) -> bool:
+        """条目头部(症状标签/标题/分类)是否覆盖查询的主题词。
+
+        与 search 的闸门同源:查询本身没有主题词时闸门不生效(返回 True),
+        避免"cakewalk"这类纯领域词提问被一律拒绝。
+        """
+        discriminative = self.topic_words(query)
+        if not discriminative:
+            return True
+        return bool(discriminative & head_terms(entry))
+
+    def linkable_entries(
+        self, query: str, entries: list[QaEntry], *, max_n: int = 3
+    ) -> list[QaEntry]:
+        """从候选中挑出"值得附直达链接"的条目,按相关度降序。
+
+        附链是**承诺**(告诉用户"你的问题在这里有答案"),因此须与 Tier 0 直答
+        用同一套证据标准:①本地判定 MEDIUM 以上;②头部覆盖到查询主题词。
+        缺任一即不附——宁可少一条链接,也不把无关章节塞给用户。
+        """
+        scored = {r.entry.id: r for r in self.search(query, top_k=len(self.entries))}
+        picked: list[tuple[float, QaEntry]] = []
+        for entry in entries:
+            result = scored.get(entry.id)
+            if result is None or result.confidence == Confidence.LOW:
+                continue
+            if not self.supports_query(entry, query):
+                continue
+            picked.append((result.score, entry))
+        picked.sort(key=lambda pair: pair[0], reverse=True)
+        return [entry for _, entry in picked[:max_n]]
+
 
     def search(self, query: str, *, top_k: int = 3) -> list[SearchResult]:
         """返回按分数降序的前 top_k 条(spec §20:最多 3,通常取第 1)。"""
@@ -126,10 +211,17 @@ class Retriever:
             return []
         query_lower = query.lower().strip()
         terms = extract_terms(query_lower)
-        scored = [
-            (entry, score_entry(entry, terms, query_lower))
-            for entry in self.entries
-        ]
+        # 主题词:查询里真正带意图的词(如"混音台"),排除"cakewalk/sonar"这类
+        # 满语料高频的领域词——它们把每条目一起抬高,却不区分任何条目。
+        discriminative = {
+            t for t in terms if len(t) >= 2 and self.term_idf(t) >= DISCRIMINATIVE_MIN_IDF
+        }
+        scored: list[tuple[QaEntry, float]] = []
+        for index, entry in enumerate(self.entries):
+            score = score_entry(entry, terms, query_lower)
+            if discriminative and not self._is_supported(index, discriminative):
+                score *= UNSUPPORTED_PENALTY
+            scored.append((entry, score))
         scored.sort(key=lambda pair: pair[1], reverse=True)
         results: list[SearchResult] = []
         for entry, score in scored[:top_k]:

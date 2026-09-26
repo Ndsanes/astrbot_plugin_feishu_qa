@@ -9,7 +9,7 @@
   "ENABLED_GROUPS": {
     "description": "启用问答的群聊列表",
     "type": "list",
-    "hint": "填群 ID;留空 = 不在任何群启用;填 * 表示全部群",
+    "hint": "填群 ID 或完整 UMO(实例ID:GroupMessage:群openid);留空 = 不在任何群启用;填 * 表示全部群",
     "default": [],
     "obvious_hint": true
   },
@@ -46,10 +46,34 @@
     "type": "float",
     "default": 3.0
   },
-  "ENABLE_LLM_TOOL": {
-    "description": "注册 search_feishu_qa 工具给主 Agent",
+  "TENTATIVE_ANSWER_ENABLED": {
+    "description": "模糊档:命中中置信区时是否投递「可能相关」章节指引",
     "type": "bool",
+    "hint": "默认关闭(仍交主 Agent)。关闭期间决策日志仍会记录 tentative_disabled 及本应发出的候选,一周后据此判断再开启",
+    "default": false
+  },
+  "DECISION_LOG_ENABLED": {
+    "description": "记录路由决策日志(阈值调参的唯一依据)",
+    "type": "bool",
+    "hint": "写入 data/plugin_data/astrbot_plugin_feishu_qa/decisions.jsonl,自动轮转",
     "default": true
+  },
+  "DECISION_LOG_TEXT_MODE": {
+    "description": "决策日志的问题原文留存方式",
+    "type": "string",
+    "hint": "truncate=截断 200 字(默认);hash=只留哈希不留原文(长期留存推荐);full=全文(仅临时复盘用)",
+    "default": "truncate"
+  },
+  "DECISION_LOG_MAX_TEXT_CHARS": {
+    "description": "决策日志问题原文截断长度",
+    "type": "int",
+    "default": 200
+  },
+  "DECISION_CACHE_TTL_MINUTES": {
+    "description": "同一问题的判定记忆时长(分钟)",
+    "type": "int",
+    "hint": "期间重复问同一问题直接复用首次结果,杜绝同一句问两次答案不同;语料重新同步后自动作废",
+    "default": 240
   },
   "LEARN_CONTEXT_MESSAGES": {
     "description": "/learn 分析的最近消息条数上限",

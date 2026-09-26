@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -18,29 +19,61 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
-from .adapter.gateway import GatewayClient
+from .adapter.gateway import DOC_FORMAT_XML, GatewayClient
+from .answer.direct import (
+    DirectAnswer,
+    format_entry_link_lines,
+    format_tentative_links,
+)
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
+from .corpus.model import normalize_title
 from .corpus.parser import parse_xml
 from .learn.candidate import (
     build_learn_prompt,
     candidate_to_pending_record,
+    extract_transcript,
     find_duplicate,
     format_candidate_display,
+    is_chat_record_transcript,
     parse_candidate,
 )
 from .retrieval.scorer import Retriever
+from .storage.decision_log import (
+    CandidateRecord,
+    DecisionCache,
+    DecisionLog,
+    DecisionRecord,
+)
 from .storage.snapshot import SnapshotStore
 
 PLUGIN_NAME = "astrbot_plugin_feishu_qa"
 DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
+
+# 单轮自动附链上限:链接是承诺不是列表,多则刷屏且冲淡主答案。
+_MAX_AUTO_LINKS = 3
+
+# 模糊档(MEDIUM)链接条数:刻意少于直答档,降低错误链接的曝光面。
+_MAX_TENTATIVE_LINKS = 2
+
+# FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
+_FAQ_CITATION_GUIDANCE = (
+    "\n[FAQ 引用规范] 知识库结果分两类:"
+    "(A)「【全家桶FAQ >」开头的条目是精选问答原文,系统会自动为其附上"
+    "飞书文档章节直达链接——你只需依据条目内容组织文字回答,"
+    "不要复述条目正文,也不要输出条目末尾的 [ref:xxxxx] 标记。"
+    "(B)其他来源(如 Cakewalk sonar 手册)没有可跳转的文档,直接依据知识块"
+    "组织回答并翻译要点;不要臆测知识块里「参考图N」「如图」指代的图片内容。"
+)
+
+
 
 
 @register(
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.3.1",
+    "0.9.0",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -59,7 +92,21 @@ class FeishuQaPlugin(Star):
 
         self._entries: list = []
         self._retriever: Retriever | None = None
+        self._entry_refs: dict = {}
         self._router: AnswerRouter | None = None
+        self._revision: int | str | None = None
+
+        # 决策日志与问题级记忆:阈值此前只在 20 条手挑样本上校准过,
+        # 真实分布只能靠线上观测回填。两者都是纯观测手段,故障一律静默。
+        self._decision_log = DecisionLog(
+            self.data_root,
+            enabled=bool(self._cfg("DECISION_LOG_ENABLED", True)),
+            text_mode=str(self._cfg("DECISION_LOG_TEXT_MODE", "truncate")),
+            max_text_chars=int(self._cfg("DECISION_LOG_MAX_TEXT_CHARS", 200)),
+        )
+        self._decision_cache = DecisionCache(
+            ttl_seconds=float(self._cfg("DECISION_CACHE_TTL_MINUTES", 240)) * 60
+        )
         self._load_corpus()
 
         self._pending_learn: dict[str, dict] = {}  # user_id -> candidate
@@ -82,6 +129,61 @@ class FeishuQaPlugin(Star):
         value = self.config.get(key, default)
         return default if value is None else value
 
+    # ── 决策日志 ──
+
+    def _thresholds(self) -> dict[str, float]:
+        """当前生效的阈值,随每条决策一起落盘——事后才能复现"当时按什么判的"。"""
+        r = self._retriever
+        if r is None:
+            return {}
+        return {"high": r.high_threshold, "medium": r.medium_threshold}
+
+    def _candidate_records(self, results, query: str) -> list[CandidateRecord]:
+        """把检索结果转成日志用的打分明细。
+
+        ``supported`` 必须拿**本次判定基准的那句 query** 重算(与判定本身
+        同源),不能记成 True——否则日志会高估自己的支撑闸门命中率。
+        """
+        if not results or self._retriever is None:
+            return []
+        return [
+            CandidateRecord(
+                entry_id=r.entry.id,
+                title=r.entry.raw_title,
+                score=r.score,
+                confidence=r.confidence,
+                supported=self._retriever.supports_query(r.entry, query),
+            )
+            for r in results
+        ]
+
+    def _log_decision(
+        self,
+        *,
+        stage: str,
+        action: str,
+        query: str,
+        results=None,
+        cached: bool = False,
+        extra: dict | None = None,
+    ) -> None:
+        """落一条决策。任何异常已被 DecisionLog 内部吞掉。"""
+        self._decision_log.record(
+            DecisionRecord(
+                stage=stage,
+                action=action,
+                query=query,
+                candidates=self._candidate_records(results, query),
+                thresholds=self._thresholds(),
+                revision=self._revision,
+                cached=cached,
+                extra=extra or {},
+            )
+        )
+
+    def _tentative_enabled(self) -> bool:
+        return bool(self._cfg("TENTATIVE_ANSWER_ENABLED", False))
+
     # ── 语料装载 ──
 
     def _load_corpus(self) -> bool:
@@ -95,6 +197,12 @@ class FeishuQaPlugin(Star):
                 e for e in self._manifest_to_entries(manifest) if e.body or e.images
             ]
             self._entries = entries
+            # 短码索引(魔法链接,Modu ADR-011):code = 稳定 entry_id 去前缀后
+            # 前 5 位十六进制;同时保留完整 id 以兼容旧调用。
+            self._entry_refs = {}
+            for e in entries:
+                self._entry_refs[e.id] = e
+                self._entry_refs.setdefault(e.id[3:8], e)
             self._retriever = Retriever(
                 entries,
                 high_threshold=float(self._cfg("HIGH_CONFIDENCE_THRESHOLD", 9.0)),
@@ -106,9 +214,12 @@ class FeishuQaPlugin(Star):
                 enabled_groups=list(self._cfg("ENABLED_GROUPS", [])),
                 max_images=int(self._cfg("MAX_IMAGES", 3)),
             )
+            self._revision = manifest.get("revision_id")
+            # 语料换了 revision,旧判定对新语料不再成立,记忆整体作废。
+            self._decision_cache.clear()
             logger.info(
                 "[FeishuQA] 语料已装载 revision=%s entries=%d",
-                manifest.get("revision_id"),
+                self._revision,
                 len(entries),
             )
             return True
@@ -159,7 +270,9 @@ class FeishuQaPlugin(Star):
 
     async def sync_once(self) -> dict:
         """抓取→解析→下载缺失图→原子提交→热替换检索器。"""
-        doc = await self.adapter.fetch_doc(fmt="xml")
+        doc = await self.adapter.fetch_doc(
+            fmt=DOC_FORMAT_XML, detail="with-ids"
+        )
         parsed = parse_xml(doc.content, source_revision=doc.revision_id)
         manifest = build_manifest(
             parsed, revision_id=doc.revision_id, document_id=doc.document_id
@@ -167,11 +280,23 @@ class FeishuQaPlugin(Star):
         old = self.store.load()
         diff = diff_manifests(old, manifest)
 
-        if old and not diff["changed"] and old.get("revision_id") == doc.revision_id:
-            return {"status": "unchanged", "revision_id": doc.revision_id}
+        # 章节定位(块 ID)会随文档结构编辑整体重生:即使正文一字未改,
+        # 也可能全部换新。快照必须无条件刷新,否则章节直达链接静默失效
+        #(故不设 unchanged 快速路径;图片按文件存在性短路,代价可忽略)。
+        old_locs = (
+            {e["id"]: e.get("source_locator", "") for e in old["entries"]}
+            if old
+            else {}
+        )
+        relinked = [
+            e
+            for e in manifest["entries"]
+            if old_locs and old_locs.get(e["id"]) != e.get("source_locator", "")
+        ]
 
-        # 下载缺失图片(单张失败不阻断)
+        # 下载缺失图片(已存在的按文件短路,单张失败不阻断)
         failures = 0
+        redownloaded = 0
         for entry in manifest["entries"]:
             for img in entry["images"]:
                 target = self.store.image_path(img["local_path"])
@@ -180,17 +305,35 @@ class FeishuQaPlugin(Star):
                 path = await self.adapter.download_media(img["file_token"], target)
                 if path is None:
                     failures += 1
+                else:
+                    redownloaded += 1
 
         store = SnapshotStore(self.data_root)
         store.commit(manifest)
         self._load_corpus()
+        if relinked:
+            samples = ";".join(
+                f"{e['id']}:{old_locs.get(e['id'], '?')}→{e['source_locator']}"
+                for e in relinked[:3]
+            )
+            logger.warning(
+                "[FeishuQA] 章节定位已刷新 %s 条(文档结构编辑会使旧块链接失效) 样例:%s",
+                len(relinked),
+                samples,
+            )
+        status = (
+            "synced"
+            if diff["changed"] or failures or redownloaded or relinked
+            else "unchanged"
+        )
         return {
-            "status": "synced",
+            "status": status,
             "revision_id": doc.revision_id,
             "added": diff["added"],
             "updated": diff["updated"],
             "removed": diff["removed"],
             "image_failures": failures,
+            "relinked": len(relinked),
         }
 
     # ── 指令 ──
@@ -202,27 +345,37 @@ class FeishuQaPlugin(Star):
     @filter.command("问", alias={"qa", "Q&A"})
     async def ask(self, event: AstrMessageEvent):
         """/问 <问题>:确定性直答入口(高置信不调用 LLM)。"""
-        question = self._strip_command(event.message_str)
+        question = self._strip_command(event.message_str, "问", "qa", "Q&A")
         group_id = event.get_group_id()
         router = self._router
         if router is None:
             yield event.plain_result("语料尚未就绪,请联系管理员执行 /qa_sync")
             return
-        plan = router.route(question, group_id=group_id)
+        plan = router.route(
+            question, group_id=group_id, umo=event.unified_msg_origin
+        )
         if plan.kind == "denied":
             # 管理员可见诊断:便于排查群号/平台形态问题;普通用户保持零响应
             if self._is_admin(event):
                 platform_name = ""
                 with contextlib.suppress(Exception):
                     platform_name = str(event.get_platform_name() or "")
+                umo = str(getattr(event, "unified_msg_origin", "") or "")
                 yield event.plain_result(
                     f"[FeishuQA] 当前会话不在白名单,已忽略。"
-                    f"platform={platform_name} group_id={group_id!r}"
+                    f"platform={platform_name} group_id={group_id!r}\n"
+                    f"如需启用本群,可将 UMO 加入 ENABLED_GROUPS: {umo!r}"
                 )
             event.stop_event()
             return
         if plan.kind == "direct" and plan.direct:
-            await self._send_direct(event, plan.direct)
+            entry = self._entry_refs.get(plan.direct.entry_id)
+            if entry is not None:
+                await self._send_direct(
+                    event, self._build_link_list(event, [entry])
+                )
+            else:
+                await self._send_direct(event, plan.direct)
             event.stop_event()  # 高置信已回答,阻断 LLM 流水线
             return
         yield event.plain_result(
@@ -241,42 +394,289 @@ class FeishuQaPlugin(Star):
         router = self._router
         if router is None:
             return
-        plan = router.route(text, group_id=event.get_group_id())
-        if plan.kind == "direct" and plan.direct:
-            await self._send_direct(event, plan.direct)
-            event.stop_event()
-        # miss/medium:不回复、不阻断 → 主 Agent 正常接管(可调 search tool)
+        group_id = event.get_group_id()
+        umo = event.unified_msg_origin
 
-    @filter.llm_tool(name="search_feishu_qa")
-    async def search_feishu_qa(self, event: AstrMessageEvent, query: str):
-        """在飞书 Q&A 文档中搜索相关问答,返回原文片段。
+        # 同一问题在 TTL 内重复问 → 复用首次判定,杜绝"同一句问两次答案不同"。
+        cached = self._decision_cache.get(text, revision=self._revision)
+        if cached is not None:
+            entry_ids = list(cached["entry_ids"])
+            if cached["action"] == "direct" and entry_ids:
+                entry = self._entry_refs.get(entry_ids[0])
+                if entry is not None:
+                    self._log_decision(
+                        stage="route",
+                        action="direct",
+                        query=text,
+                        results=[],
+                        cached=True,
+                    )
+                    await self._send_direct(
+                        event, self._build_link_list(event, [entry])
+                    )
+                    event.stop_event()
+                    return
+
+        plan = router.route(text, group_id=group_id, umo=umo, top_k=_MAX_TENTATIVE_LINKS + 1)
+
+        if plan.kind == "direct" and plan.direct:
+            entry = self._entry_refs.get(plan.direct.entry_id)
+            self._decision_cache.put(
+                text,
+                action="direct",
+                entry_ids=[plan.direct.entry_id],
+                revision=self._revision,
+            )
+            self._log_decision(
+                stage="route", action="direct", query=text, results=plan.candidates
+            )
+            if entry is not None:
+                await self._send_direct(event, self._build_link_list(event, [entry]))
+            else:
+                await self._send_direct(event, plan.direct)
+            event.stop_event()
+            return
+
+        if plan.kind == "tentative":
+            # MEDIUM 区:证据不足以断言"这就是答案",但可能有用。
+            # 默认仍交主 Agent(2026-09-26 实测 14 条真问里 MEDIUM 占 8 条,
+            # 其中约一半 top-1 是错的,贸然接管会把今天能答对的问题降级);
+            # 开启后只投模糊措辞的章节指引,不贴正文、不附图、不作断言。
+            if self._tentative_enabled():
+                picked = [r.entry for r in plan.candidates[:_MAX_TENTATIVE_LINKS]]
+                self._log_decision(
+                    stage="route",
+                    action="tentative_sent",
+                    query=text,
+                    results=plan.candidates,
+                )
+                self._decision_cache.put(
+                    text,
+                    action="tentative",
+                    entry_ids=[e.id for e in picked],
+                    revision=self._revision,
+                )
+                await self._send_direct(
+                    event,
+                    self._build_tentative_list(event, picked),
+                )
+                event.stop_event()
+                return
+            # 关闭时也记录:一周后据此判断"若开启会发出什么",零风险回放。
+            self._log_decision(
+                stage="route",
+                action="tentative_disabled",
+                query=text,
+                results=plan.candidates,
+            )
+            return
+
+        # miss:证据不足,不回复、不阻断 → 主 Agent 正常接管
+        self._log_decision(
+            stage="route", action="miss", query=text, results=plan.candidates
+        )
+
+
+    @filter.llm_tool(name="qa_send_answer")
+    async def qa_send_answer(self, event: AstrMessageEvent, entry_ids: str):
+        """把与用户问题匹配的一个或多个 QA 条目整理成飞书文档章节直达链接列表发送给用户。
+
+        当【全家桶FAQ】条目命中问题时优先使用;链接列表发出后只需简短衔接,
+        不要复述条目内容。
 
         Args:
-            query (str): 用户的实际问题或关键词
+            entry_ids (str): 知识库条目末尾 [ref:xxxxx] 里的引用短码,
+                多个用英文逗号分隔
         """
-        if self._retriever is None:
-            yield event.plain_result("search_feishu_qa: 语料未就绪")
+        wanted = [s for s in re.split(r"[,，、;\s]+", entry_ids or "") if s.strip()]
+        entries, skipped, seen = [], [], set()
+        for raw in wanted:
+            # 魔法短码(Modu ADR-011):知识块携带的引用码 → 语料条目;
+            # 完整条目 ID 亦接受。映射外取值一律拒绝,模型无法猜测绕过。
+            entry = self._entry_refs.get(raw)
+            if entry is None:
+                skipped.append(raw)
+                continue
+            if entry.id in seen:
+                continue
+            seen.add(entry.id)
+            entries.append(entry)
+        if not entries:
+            bad = ",".join(skipped) if skipped else "未提供有效条目"
+            return f"发送失败:没有可投递的条目({bad})"
+
+        # v0.7.4 曾因 source_locator 为空误判"markdown 渲染剥锚点"而全面
+        # 回退裸链接;with-ids 修复后锚点真实可用,qq_official 恢复原生
+        # markdown 超链接(msg_type=2 默认渲染,标题可点击)。其他平台
+        # (OneBot 纯文本)维持"标题行 + 👉 裸链接"避免字面量输出。
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+
+        lines = [f"命中 {len(entries)} 条肖闻的解答:"]
+        lines += format_entry_link_lines(
+            entries,
+            url_of=self._wiki_block_url,
+            markdown=platform_name == "qq_official",
+            leading_newline=True,
+            url_on_newline=True,
+        )
+        lines.append("\n > Xiaowenn《有福同享全家桶Q&A汇总》")
+        direct = DirectAnswer(
+            text="\n".join(lines), image_paths=[], entry_id=entries[0].id
+        )
+        # 单次 event.send 投出整块;经此而非 set_result:Agent 循环保持存活。
+        await self._send_direct(event, direct)
+        note = f";已跳过:{','.join(skipped)}" if skipped else ""
+        titles = "》《".join(normalize_title(e.raw_title) for e in entries)
+        return (
+            f"已投递{len(entries)}条章节直达链接:《{titles}》{note};"
+            "请勿复述条目正文,链接里含图文步骤。"
+        )
+
+    def _build_link_list(self, event, entries: list) -> DirectAnswer:
+        """条目列表 → 链接列表载荷(qq_official 用 markdown 超链接,其余裸链接)。"""
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        lines = [f" >  直接命中 {len(entries)} 条肖闻的解答: \n"]
+        md = platform_name == "qq_official"
+        lines += format_entry_link_lines(
+            entries, url_of=self._wiki_block_url, markdown=md
+        )
+        lines.append("\n > Xiaowenn《有福同享全家桶Q&A汇总》")
+        return DirectAnswer(
+            text="\n".join(lines), image_paths=[], entry_id=entries[0].id
+        )
+
+    def _build_tentative_list(self, event, entries: list) -> DirectAnswer:
+        """模糊档:章节指引列表(措辞见 format_tentative_links)。"""
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        return format_tentative_links(
+            entries,
+            url_of=self._wiki_block_url,
+            markdown=platform_name == "qq_official",
+        )
+
+    def _wiki_block_url(self, entry) -> str:
+        """构造飞书文档锚点直达链接(WIKI_URL#block_id);无定位时退回整篇。"""
+        base = str(self._cfg("WIKI_URL", "") or "").strip().rstrip("/")
+        if not base:
+            return "(未配置 WIKI_URL)"
+        if entry.source_locator:
+            return f"{base}#{entry.source_locator}"
+        return base
+
+    @filter.on_llm_tool_respond()
+    async def auto_send_faq_links(self, event, tool, tool_args, tool_result) -> None:
+        """astr_kb_search 命中精选问答后,自动投递对应章节直达链接。
+
+        确定性投递:解析检索结果里的 [ref:短码],不依赖模型自觉调用工具;
+        同一轮会话内已发过的条目自动去重。单次最多附 3 条防刷屏。
+
+        **附链是对用户的承诺**("你的问题在这里有答案"),因此不能照抄检索顺序:
+        2026-09-15 实测,用户问"Cakewalk 的混音台怎么打开",模型检索后把
+        检索结果里前三条 FAQ(ref:c1a91/c118a/8a197——分别是"连接MIDI设备"
+        "Clip重叠""搜索不到自带音源")当链接发出,与提问毫无关系。根因是
+        KB 检索的相关度是**为该次检索词**服务的,靠前的 FAQ 只说明它和
+        "Cakewalk"同域,不代表答得上用户的问题。现改为用**用户原问题**做
+        一次本地确定性判定,沿用与 Tier 0 直答同一套证据标准(本地 MEDIUM+
+        且头部覆盖主题词),不达标就不附链——宁可少一条链接,也不把无关
+        章节塞给用户。零 LLM、零网络,仍是纯本地计算。
+        """
+        if getattr(tool, "name", "") != "astr_kb_search" or tool_result is None:
             return
-        results = self._retriever.search(query, top_k=3)
-        if not results or results[0].confidence == "LOW":
-            payload = {"matches": [], "note": "没有找到足够相关的 QA"}
+        try:
+            text = "\n".join(
+                c.text for c in tool_result.content if getattr(c, "text", None)
+            )
+        except Exception:
+            return
+        codes = list(dict.fromkeys(re.findall(r"\[ref:([a-z0-9]{5})\]", text)))
+        candidates = []
+        for code in codes:
+            entry = self._entry_refs.get(code)
+            if entry is not None:
+                candidates.append(entry)
+        # 判定基准是用户原问题(剥掉 @唤醒),不是模型的检索词。
+        question = self._strip_wake(getattr(event, "message_str", "") or "")
+        if not candidates:
+            self._log_decision(
+                stage="linkable",
+                action="links_suppressed",
+                query=question,
+                results=[],
+                extra={"reason": "no_ref_matched", "n_refs": len(codes)},
+            )
+            return
+        retriever = self._retriever
+        n_before = len(candidates)
+        if retriever is not None and question:
+            candidates = retriever.linkable_entries(
+                question, candidates, max_n=_MAX_AUTO_LINKS
+            )
         else:
-            payload = {
-                "matches": [
-                    {
-                        "title": r.entry.raw_title,
-                        "section": " > ".join(r.entry.section_path),
-                        "symptoms": r.entry.symptom_tags,
-                        "body": r.entry.body[:1500],
-                        "images_count": len(r.entry.images),
-                        "confidence": round(r.score, 2),
-                    }
-                    for r in results
-                    if r.confidence != "LOW"
-                ],
-                "note": "只允许依据以上原文回答;不足时明确告知用户资料中没有。",
-            }
-        yield event.plain_result(json.dumps(payload, ensure_ascii=False))
+            candidates = candidates[:_MAX_AUTO_LINKS]
+        if not candidates:
+            # 闸门全灭:这正是 2026-09-15 事故要拦的形态(检索命中但答非所问)。
+            # 抑制原因落盘,一周后可直接统计闸门的真实拦截率与误杀率。
+            self._log_decision(
+                stage="linkable",
+                action="links_suppressed",
+                query=question,
+                results=[],
+                extra={"reason": "gate_rejected_all", "n_refs": n_before},
+            )
+            return
+        sent = set(event.get_extra("_faq_links_sent") or ())
+        new_entries = [e for e in candidates if e.id not in sent]
+        if not new_entries:
+            # 候选全部已在会话内投过:不重复打扰,但判定本身仍记一条,
+            # 否则"附链被抑制"与"附链重复"在日志里无法区分。
+            self._log_decision(
+                stage="linkable",
+                action="links_suppressed",
+                query=question,
+                results=[],
+                extra={"reason": "all_already_sent", "n_candidates": len(candidates)},
+            )
+            return
+        sent.update(e.id for e in new_entries)
+        self._log_decision(
+            stage="linkable",
+            action="links_sent",
+            query=question,
+            results=[],
+            extra={
+                "n_sent": len(new_entries),
+                "n_candidates": len(candidates),
+                "titles": [e.raw_title for e in new_entries],
+            },
+        )
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        md_mode = platform_name == "qq_official"
+        lines = ["📎 以上解答的文档直达章节:"]
+        lines += format_entry_link_lines(
+            new_entries, url_of=self._wiki_block_url, markdown=md_mode
+        )
+        direct = DirectAnswer(
+            text="\n".join(lines), image_paths=[], entry_id=new_entries[0].id
+        )
+        await self._send_direct(event, direct)
+        event.set_extra("_faq_links_sent", sent)
+
+    @filter.on_llm_request()
+    async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:
+        """注入 FAQ 引用规范(恒定文本,前缀缓存安全)。
+
+        条目发现由知识块内的 [ref:短码] 承载,模型从检索结果中原样搬运
+        短码调用 qa_send_answer;此处不再做词法预判与动态注入。
+        """
+        req.system_prompt = (req.system_prompt or "") + _FAQ_CITATION_GUIDANCE
 
     # ── 管理指令 ──
 
@@ -329,14 +729,14 @@ class FeishuQaPlugin(Star):
         yield event.plain_result("语料已重新加载" if ok else "语料加载失败")
 
 
-    @filter.command("learn")
+    @filter.command("learn", alias={"学习"})
     async def learn(self, event: AstrMessageEvent):
-        """/learn:分析最近群聊,提取候选 QA(管理员;确认后才生效)。"""
+        """/learn(或 /学习):分析最近群聊,提取候选 QA(管理员;确认后才生效)。"""
         if not self._is_admin(event):
             yield event.plain_result("仅管理员可用")
             return
 
-        text = self._strip_command(event.message_str)
+        text = self._strip_command(event.message_str, "learn", "学习")
         user_id = str(event.get_sender_id())
 
         if text.lower() in ("ok", "确认", "yes"):
@@ -371,11 +771,14 @@ class FeishuQaPlugin(Star):
             yield event.plain_result("已放弃。" if dropped else "没有待确认的候选。")
             return
 
-        # 1) 取最近群聊历史(aiocqhttp 专属能力,失败即告知)
-        history_texts = await self._fetch_recent_history(event)
+        # 1) 取素材:聊天记录转录 > 引用消息 > 平台历史(见 _collect_learn_material)
+        history_texts, source_note = await self._collect_learn_material(event, text)
         if history_texts is None:
             yield event.plain_result(
-                "当前平台不支持读取群历史消息,/learn 仅在 aiocqhttp 下可用。"
+                "没能取到可分析的素材。可以这样用:\n"
+                "① 把群里的问答「合并转发」到群里,再引用它发 /学习;\n"
+                "② 直接引用某条回答发 /学习;\n"
+                "③(仅 aiocqhttp)直接 /学习 分析最近群聊。"
             )
             return
         if not history_texts:
@@ -399,7 +802,9 @@ class FeishuQaPlugin(Star):
         # 3) 严格解析 + 查重
         candidate = parse_candidate(raw or "")
         if candidate is None:
-            yield event.plain_result("最近的群聊中没有值得加入 FAQ 的新问答。")
+            yield event.plain_result(
+                f"这份素材({source_note})里没有值得加入 FAQ 的新问答。"
+            )
             return
 
         duplicate = find_duplicate(candidate, self._retriever) if self._retriever else None
@@ -411,17 +816,80 @@ class FeishuQaPlugin(Star):
             return
 
         self._pending_learn[user_id] = candidate
-        yield event.plain_result(format_candidate_display(candidate))
+        yield event.plain_result(
+            f"[素材来源: {source_note}]\n{format_candidate_display(candidate)}"
+        )
+
+    async def _collect_learn_material(
+        self, event: AstrMessageEvent, text: str
+    ) -> tuple[list[str] | None, str]:
+        """按可靠性优先级收集 /learn 的分析素材。
+
+        实测(2026-09-16)三条来源的可用性与质量:
+
+        1. **聊天记录转录**(最优):官方 QQ 机器人在**服务端**就把合并转发展开成
+           纯文本(message_type=102,[群聊的聊天记录] + === 消息 N === + [发送者]),
+           随 content 一起下发,所以插件无需任何转发组件解析,`message_str` 即完整
+           转录。素材由转发者人工筛选,信噪比远高于"最近 N 条闲聊",且自带发送者。
+        2. **引用消息**:取被引用内容及本条的正文(被引用内容在 Reply 组件的
+           message_str/chain 上)。适合"引用某人的回答 → /学习"。
+        3. **平台历史**(aiocqhttp 专属):`get_group_msg_history`,其他平台不可用。
+
+        返回 (素材列表, 来源说明);都取不到时素材为 None。
+        """
+        # 1) 本条消息本身就是一份聊天记录转录
+        if is_chat_record_transcript(text):
+            return [extract_transcript(text)], "聊天记录转录"
+
+        # 2) 引用消息:被引用的内容 + 本条附带说明
+        quoted = self._extract_quoted_text(event)
+        if quoted:
+            material = [quoted]
+            if text.strip():
+                material.append(text.strip())
+            return material, "引用消息"
+
+        # 3) 平台历史回退
+        history_texts = await self._fetch_recent_history(event)
+        if history_texts:
+            return history_texts, "最近群聊历史"
+        return None, ""
+
+    def _extract_quoted_text(self, event: AstrMessageEvent) -> str:
+        """取出本条消息引用的内容(纯文本);无引用或取不到返回空串。"""
+        for comp in event.get_messages() or []:
+            if getattr(comp, "type", "") != "Reply":
+                continue
+            direct = str(getattr(comp, "message_str", "") or "").strip()
+            if direct:
+                return direct
+            chain = getattr(comp, "chain", None) or []
+            parts = [
+                str(getattr(c, "text", "") or "")
+                for c in chain
+                if getattr(c, "text", None)
+            ]
+            joined = " ".join(p for p in parts if p).strip()
+            if joined:
+                return joined
+        return ""
 
     async def _fetch_recent_history(self, event: AstrMessageEvent) -> list[str] | None:
-        """读最近 N 条群消息文本;平台不支持返回 None。"""
+        """读最近 N 条群消息文本;仅 aiocqhttp 可用,其他平台返回 None。
+
+        qq_official 的 event.bot 是 BotAPI(无 call_action),此前会走到
+        `client.api.call_action` 并抛 AttributeError——虽被兜住,但每轮都产生
+        一条无意义的失败日志。这里先按平台判定,不做注定失败的尝试。
+        """
         limit = int(self._cfg("LEARN_CONTEXT_MESSAGES", 50))
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        if platform_name and platform_name != "aiocqhttp":
+            return None
         try:
             bot = getattr(event, "bot", None)
-            if bot is None:
-                client = self._get_aiocqhttp_client(event)
-            else:
-                client = bot
+            client = bot if bot is not None else self._get_aiocqhttp_client(event)
             if client is None:
                 return None
             result = await client.api.call_action(
@@ -576,9 +1044,29 @@ class FeishuQaPlugin(Star):
     # ── 文本工具 ──
 
     @staticmethod
-    def _strip_command(message_str: str) -> str:
+    def _strip_command(message_str: str, *command_names: str) -> str:
+        """剥掉指令名,返回参数部分。
+
+        WakingCheckStage 在唤醒检查时**已经把 wake_prefix("/")剥掉**
+        (astrbot/core/pipeline/waking_check/stage.py:130),所以 handler 收到的
+        是"指令名+参数"形态(`learn ok`、`问 xxx`),而不是 `/learn ok`。
+        2026-09-16 线上实测因此踩坑:`/learn ok` 剥不出 "ok" → 确认分支永不命中
+        → 掉进素材分析分支并回复"没能取到可分析的素材"。这里显式剥指令名。
+        """
         text = (message_str or "").strip()
-        for prefix in ("/问", "问:", "问:", "问 "):
+        # 核心通常会剥掉 wake_prefix,但私聊/其他入口下可能仍带 "/",一并容错。
+        probe = text[1:].lstrip() if text.startswith("/") else text
+        for name in sorted(command_names, key=len, reverse=True):
+            if not name:
+                continue
+            if probe == name or name == text:
+                return ""
+            for candidate in (probe, text):
+                if candidate.startswith(name + " "):
+                    return candidate[len(name) + 1 :].strip()
+        if probe != text:
+            text = probe
+        for prefix in ("/问", "问:", "问 ", "问"):
             if text.startswith(prefix):
                 return text[len(prefix) :].strip()
         return text
@@ -586,4 +1074,3 @@ class FeishuQaPlugin(Star):
     @staticmethod
     def _strip_wake(message_str: str) -> str:
         return (message_str or "").strip()
-

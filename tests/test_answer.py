@@ -9,7 +9,6 @@ import pytest
 from astrbot_plugin_feishu_qa.answer.direct import (
     SOURCE_ATTRIBUTION,
     format_direct_answer,
-    format_miss_reply,
 )
 from astrbot_plugin_feishu_qa.answer.router import AnswerRouter
 from astrbot_plugin_feishu_qa.corpus.parser import parse_xml
@@ -52,6 +51,34 @@ class TestWhitelist:
         assert router.route("没声音", group_id="222").kind == "denied"
         assert router.route("没声音", group_id=None).kind == "denied"
         assert router.route("没声音", group_id="111").kind != "denied"
+
+    def test_umo_entry_matches_exact_umo(self, env) -> None:
+        umo = "inst_a:GroupMessage:grp_1"
+        router = AnswerRouter(
+            env["retriever"], store=env["store"], enabled_groups=[umo]
+        )
+        assert router.group_enabled("grp_1", umo=umo) is True
+        assert router.route("没声音", group_id="grp_1", umo=umo).kind != "denied"
+
+    def test_umo_entry_rejects_same_group_other_instance(self, env) -> None:
+        router = AnswerRouter(
+            env["retriever"],
+            store=env["store"],
+            enabled_groups=["inst_a:GroupMessage:grp_1"],
+        )
+        # 同群 openid 挂在另一实例下:UMO 精确匹配不通过
+        other = "inst_b:GroupMessage:grp_1"
+        assert router.group_enabled("grp_1", umo=other) is False
+        assert router.route("没声音", group_id="grp_1", umo=other).kind == "denied"
+
+    def test_bare_entries_ignore_umo_dimension(self, env) -> None:
+        router = AnswerRouter(
+            env["retriever"], store=env["store"], enabled_groups=["grp_1"]
+        )
+        # 裸 ID 条目继续按 get_group_id 匹配,与 UMO 无关(向后兼容)
+        assert (
+            router.group_enabled("grp_1", umo="inst_x:GroupMessage:grp_1") is True
+        )
 
 
 class TestDirectAnswer:
@@ -96,10 +123,6 @@ class TestMiss:
         router = AnswerRouter(env["retriever"], store=env["store"], enabled_groups=["*"])
         plan = router.route("今天上海天气怎么样", group_id="1")
         assert plan.kind == "miss"
-
-    def test_miss_reply_text(self) -> None:
-        text = format_miss_reply()
-        assert "没有" in text and "/问" in text
 
 
 class TestMetricsContract:
