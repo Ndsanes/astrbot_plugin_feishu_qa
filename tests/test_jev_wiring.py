@@ -363,3 +363,64 @@ class TestHookD:
         )
         for c in calls[0]["state"]["candidates"]:
             assert len(c["text"]) <= 600
+
+
+# ── /jev_probe 诊断命令 ──
+
+
+def _probe_result(plugin, event):
+    """收集 async generator 的产出(模块级 _run 会丢弃 item,这里要文本)。"""
+    import asyncio
+
+    async def go():
+        return [item async for item in plugin.jev_probe(event)]
+
+    return asyncio.run(go())
+
+
+class TestJevProbe:
+    def _admin_event(self, msg: str = "/jev_probe midi设备怎么连接"):
+        ev = AstrMessageEvent(message_str=msg, sender_id="admin1", group_id="g1")
+        ev._is_admin_flag = True
+        ev.is_at_or_wake_command = True
+        return ev
+
+    def test_non_admin_rejected(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, _answer([0.8, 0.1, 0.1]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        ev = AstrMessageEvent(message_str="/jev_probe x", sender_id="stranger", group_id="g1")
+        ev._is_admin_flag = False
+        assert "仅管理员" in _probe_result(p, ev)[0][1]
+
+    def test_disabled_reports_not_enabled(self, make_plugin, monkeypatch) -> None:
+        p = make_plugin(JEV_ENABLED=False, JEV_API_KEY="")
+        assert "Jev 未启用" in _probe_result(p, self._admin_event())[0][1]
+
+    def test_empty_question_shows_usage(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, _answer([0.8, 0.1, 0.1]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        assert "用法" in _probe_result(p, self._admin_event("/jev_probe "))[0][1]
+
+    def test_reports_probabilities_and_decision(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        text = _probe_result(p, self._admin_event())[0][1]
+        assert "answerable" in text
+        assert "P=0.800" in text
+        assert "←选中" in text
+        assert "answer_self" in text
+
+    def test_reports_fallback_when_jev_unavailable(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, raises=TimeoutError())
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        text = _probe_result(p, self._admin_event())[0][1]
+        assert "不可用" in text and "回落" in text
+
+    def test_probe_never_sends_to_group(self, make_plugin, monkeypatch) -> None:
+        """诊断命令只回显给提问者,不得向群里发内容、不得阻断。"""
+        _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        ev = self._admin_event()
+        _probe_result(p, ev)
+        assert ev.sent == [], "诊断命令不得投递消息"
+        assert ev.stopped is False, "诊断命令不得阻断流水线"

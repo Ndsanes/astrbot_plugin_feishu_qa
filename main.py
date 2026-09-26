@@ -43,6 +43,7 @@ from .jev.policy import (
     build_state,
     decide_links,
     decide_takeover,
+    option_key,
 )
 from .learn.candidate import (
     build_learn_prompt,
@@ -96,7 +97,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.3",
+    "0.9.4",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -899,6 +900,73 @@ class FeishuQaPlugin(Star):
             f"图片数量: {manifest.get('image_count', 0)}",
             f"最后构建: {manifest.get('built_at', '无')}",
         ]
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("jev_probe", alias={"jev诊断"})
+    async def jev_probe(self, event: AstrMessageEvent):
+        """[管理] 用 Jev 干跑一次判定,打印候选概率与最终决策。不发群、不阻断。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可用")
+            return
+        if self._jev is None:
+            yield event.plain_result(
+                "Jev 未启用。检查配置 JEV_ENABLED 与 JEV_API_KEY。"
+            )
+            return
+        question = self._strip_command(event.message_str, "jev_probe", "jev诊断")
+        if not question.strip():
+            yield event.plain_result("用法:/jev_probe <你的问题>")
+            return
+
+        router = self._router
+        if router is None:
+            yield event.plain_result("语料尚未就绪,请先 /qa_sync")
+            return
+        plan = router.route(
+            question,
+            group_id=event.get_group_id(),
+            umo=event.unified_msg_origin,
+            top_k=_JEV_MAX_CANDIDATES,
+        )
+        entries = [r.entry for r in plan.candidates]
+        cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
+        result = self._jev_ask(question, cands)
+
+        ans_t = float(self._cfg("JEV_ANSWERABLE", 0.50))
+        take_t = float(self._cfg("JEV_TAKEOVER_PROBABILITY", 0.35))
+        link_t = float(self._cfg("JEV_LINK_PROBABILITY", 0.45))
+        lines = [
+            f"问题: {question}",
+            f"本地判定: {plan.kind} (score={plan.score:.2f})",
+            f"阈值: answerable>={ans_t}  takeover>={take_t}  link>={link_t}",
+        ]
+        if result is None or not result.ok:
+            reason = result.error if result is not None else "no_candidates"
+            lines.append(f"Jev: **不可用** ({reason}) → 会回落到本地判定")
+            yield event.plain_result("\n".join(lines))
+            return
+
+        answerable = result.noul(ANY_QID)
+        gate = "✅过门槛" if answerable >= ans_t else "❌未过门槛"
+        lines.append(f"answerable = {answerable:.3f} {gate}")
+        choice = result.choice(RANK_QID)
+        for i, entry in enumerate(entries):
+            key = option_key(i)
+            p = choice.probabilities.get(key) if choice else None
+            mark = " ←选中" if choice and choice.choice == key else ""
+            p_txt = f"{p:.3f}" if p is not None else "缺失"
+            lines.append(f"  [{i}] P={p_txt}{mark}  {normalize_title(entry.raw_title)[:34]}")
+        if choice is not None and choice.confidence is not None:
+            lines.append(f"choice confidence = {choice.confidence:.3f}")
+        decision = decide_takeover(
+            cands,
+            result,
+            answerable_threshold=ans_t,
+            probability_threshold=take_t,
+        )
+        picked = f" → {list(decision.entry_ids)}" if decision.entry_ids else ""
+        lines.append(f"C 位点决策: {decision.action} ({decision.reason}){picked}")
+        lines.append(f"token 用量: {result.input_tokens} in / model {result.model}")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("qa_sync")
