@@ -31,7 +31,7 @@ from .corpus.model import normalize_title
 from .corpus.parser import parse_xml
 from .jev.client import DEFAULT_ENDPOINT as DEFAULT_JEV_ENDPOINT
 from .jev.client import DEFAULT_MODEL as DEFAULT_JEV_MODEL
-from .jev.client import JevClient
+from .jev.client import JevClient, noul_question
 from .jev.policy import (
     ACTION_ANSWER_SELF,
     ACTION_FALLBACK,
@@ -97,7 +97,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.4",
+    "0.9.5",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -333,6 +333,45 @@ class FeishuQaPlugin(Star):
             )
         return True
 
+    def _jev_selfcheck(self) -> None:
+        """启动时自检一次 Jev 连通性,结果写日志。
+
+        动机:改完 `JEV_API_KEY` 之后,管理员最需要的是**立刻**知道能不能用,
+        而不是等第一条真实提问才发现鉴权失败或容器出不了网——那时的表现是
+        "静默回落到本地判定",看起来像功能没生效,实则可能只是 key 过期。
+
+        只发一个极小的 Noul,不碰语料、不影响任何用户路径;失败只告警,
+        插件照常以本地判定服务。
+        """
+        if self._jev is None:
+            return
+        try:
+            result = self._jev.evaluate(
+                state={"question": "Cakewalk 无法激活", "candidates": []},
+                questions={
+                    "ping": noul_question(
+                        "Is the user asking about a Cakewalk software problem?",
+                        true="The question is about Cakewalk or its plugins.",
+                        false_="The question is not about Cakewalk at all.",
+                    )
+                },
+            )
+        except Exception as exc:  # 自检不得让插件起不来
+            logger.warning("[FeishuQA] Jev 自检异常: %s", type(exc).__name__)
+            return
+        if not result.ok:
+            logger.warning(
+                "[FeishuQA] Jev 自检失败(%s)——判定将静默回落到本地规则,机器人仍可用",
+                result.error,
+            )
+            return
+        logger.info(
+            "[FeishuQA] Jev 自检通过 model=%s ping=%.2f tok=%d",
+            result.model,
+            result.noul("ping") or 0.0,
+            result.input_tokens,
+        )
+
     def _jev_filter_links(
         self, question: str, entries: list
     ) -> JevDecision | None:
@@ -424,6 +463,9 @@ class FeishuQaPlugin(Star):
             )
         if int(self._cfg("SYNC_INTERVAL_HOURS", 12)) > 0:
             self._sync_task = asyncio.create_task(self._sync_loop())
+        if bool(self._cfg("JEV_SELFTEST_ON_LOAD", True)):
+            # 同步执行:管理员在日志里立刻能看到 key/网络是否通,而不是等首问
+            self._jev_selfcheck()
 
     async def terminate(self) -> None:
         for task in (self._sync_task,):

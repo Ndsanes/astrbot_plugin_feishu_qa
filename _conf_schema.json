@@ -88,6 +88,12 @@
     "obvious_hint": true,
     "default": ""
   },
+  "JEV_SELFTEST_ON_LOAD": {
+    "description": "插件加载时自检一次 Jev 连通性并写日志",
+    "type": "bool",
+    "hint": "改完 API Key 后无需等第一条真实提问即可确认可用;失败只告警,不影响机器人",
+    "default": true
+  },
   "JEV_MODEL": {
     "description": "Jev 模型版本",
     "type": "string",
