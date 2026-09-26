@@ -80,6 +80,9 @@ _JEV_TEXT_CHARS = 600
 # 本地检索本来就只取前 _MAX_TENTATIVE_LINKS+1,这里再兜一层底。
 _JEV_MAX_CANDIDATES = 3
 
+# 金丝雀探测条数:足够看出分歧率的量级,又不至于在插件加载时打太多次外网。
+_JEV_SELFTEST_PROBES = 4
+
 # FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
 _FAQ_CITATION_GUIDANCE = (
     "\n[FAQ 引用规范] 知识库结果分两类:"
@@ -97,7 +100,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.7",
+    "0.9.8",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -385,25 +388,60 @@ class FeishuQaPlugin(Star):
             result.noul("ping") or 0.0,
             result.input_tokens,
         )
-        self._jev_selftest_chain(probe)
+        self._jev_selftest_sweep()
 
-    def _jev_probe_query(self) -> str:
-        """从语料里取一条带问号的标题作为探针问题(不依赖写死文案)。"""
-        for entry in self._entries[:20]:
+    def _jev_probe_queries(self, limit: int = _JEV_SELFTEST_PROBES) -> list[str]:
+        """从语料里取若干条带问号的标题作为探针问题(不依赖写死文案)。
+
+        取**多条**而非一条:单条只是一次抽样,看不出 Jev 与本地结论的**分歧率**。
+        这里按语料顺序取,不挑题——挑一条已知会分歧的当探针就是自欺。
+        """
+        out: list[str] = []
+        for entry in self._entries:
             _, stripped = extract_symptom_tags(entry.raw_title)
             q = stripped.split("？")[0].split("?")[0].strip()
-            if len(q) >= 6:
-                return q
-        return ""
+            if len(q) >= 6 and q not in out:
+                out.append(q)
+            if len(out) >= limit:
+                break
+        return out
 
-    def _jev_selftest_chain(self, question: str) -> None:
+    def _jev_probe_query(self) -> str:
+        """单条探针(供 /jev_probe 之外的旧调用点使用)。"""
+        queries = self._jev_probe_queries(1)
+        return queries[0] if queries else ""
+
+    def _jev_selftest_sweep(self) -> None:
+        """扫若干条语料自带问句,统计 Jev 与本地结论的分歧率。
+
+        为什么扫多条:标准里要的是"观察到一次因 Jev 结论而改变的路由结果"。
+        拿单条已知会分歧的题当探针是自欺;按语料顺序取若干条、如实报出
+        分歧几次,才是真观测——分歧为 0 也是有价值的结论。
+
+        每条都走完整链路并落一条 ``jev_selftest`` 记录。
+        """
+        queries = self._jev_probe_queries()
+        if not queries:
+            return
+        diverged: list[str] = []
+        for q in queries:
+            picked, local = self._jev_selftest_chain(q)
+            if picked and local and picked != local:
+                diverged.append(q)
+        logger.info(
+            "[FeishuQA] Jev 金丝雀: 探测 %d 条,Jev 与本地结论分歧 %d 条%s",
+            len(queries), len(diverged),
+            f" → {diverged[:2]}" if diverged else "",
+        )
+
+    def _jev_selftest_chain(self, question: str) -> tuple[str, str]:
         """金丝雀:跑完整决策链,落一条 jev_selftest 决策记录。
 
         记录里同时写本地结论与 Jev 结论,便于一眼看出 Jev 有没有改变动作。
         全程不发消息、不阻断、只写自己的决策日志。
         """
         if self._retriever is None or not question:
-            return
+            return "", ""
         try:
             # 同样**不走 router**:router 带群白名单门禁,而自检用的 group_id
             # 不在白名单里,会被判 denied 拿不到候选(与 /jev_probe 同一个坑)。
@@ -413,10 +451,13 @@ class FeishuQaPlugin(Star):
             result = self._jev_ask(question, cands)
         except Exception as exc:
             logger.warning("[FeishuQA] Jev 决策链自检异常: %s", type(exc).__name__)
-            return
+            return "", ""
         if result is None or not result.ok or not entries:
-            logger.info("[FeishuQA] Jev 决策链自检跳过(无可用候选或 Jev 不可用)")
-            return
+            logger.info(
+                "[FeishuQA] Jev 决策链自检跳过: cands=%d jev=%s",
+                len(entries), result.error if result else "no_client",
+            )
+            return "", ""
 
         decision = decide_takeover(
             cands,
@@ -453,6 +494,7 @@ class FeishuQaPlugin(Star):
             " [与本地不同]" if changed else "",
             ",".join(decision.entry_ids) or "-",
         )
+        return (decision.entry_ids[0] if decision.entry_ids else ""), local_pick
 
     def _jev_filter_links(
         self, question: str, entries: list

@@ -453,12 +453,28 @@ class TestJevProbe:
 
 
 class TestSelfTestChain:
-    def test_probe_query_derived_from_corpus(self, make_plugin, monkeypatch) -> None:
+    def test_probe_queries_derived_from_corpus(self, make_plugin, monkeypatch) -> None:
         _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
         p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
-        q = p._jev_probe_query()
-        assert len(q) >= 6, "探针问题应取自语料标题"
-        assert not q.endswith(("？", "?")), "探针应去掉句末问号"
+        qs = p._jev_probe_queries()
+        assert len(qs) >= 2, "金丝雀须探测多条,单条只是抽样"
+        assert qs == p._jev_probe_queries(), "应可重复得到同样的探针"
+        for q in qs:
+            assert len(q) >= 6
+            assert not q.endswith(("？", "?")), "探针应去掉句末问号"
+
+    def test_sweep_writes_one_record_per_probe(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        p._jev_selftest_sweep()
+        rows = [r for r in _decisions(p) if r["action"] == "jev_selftest"]
+        assert len(rows) == len(p._jev_probe_queries())
+
+    def test_sweep_survives_outage(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, raises=TimeoutError())
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        p._jev_selftest_sweep()  # 不得抛
+        assert not [r for r in _decisions(p) if r["action"] == "jev_selftest"]
 
     def test_selftest_writes_jev_record(self, make_plugin, monkeypatch) -> None:
         _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
