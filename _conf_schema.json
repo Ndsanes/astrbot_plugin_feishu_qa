@@ -75,6 +75,54 @@
     "hint": "期间重复问同一问题直接复用首次结果,杜绝同一句问两次答案不同;语料重新同步后自动作废",
     "default": 240
   },
+  "JEV_ENABLED": {
+    "description": "启用 Jev 决策模型接管路由判定",
+    "type": "bool",
+    "hint": "关闭或未配 JEV_API_KEY 时,两个接管点完全走本地判定,行为与 v0.9.0 一致",
+    "default": false
+  },
+  "JEV_API_KEY": {
+    "description": "TypeSafe Jev API Key",
+    "type": "string",
+    "hint": "console.typesafe.ai 自助申请;仅存于实例配置,不会写入决策日志",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "JEV_MODEL": {
+    "description": "Jev 模型版本",
+    "type": "string",
+    "hint": "留空用 jev-latest;调阈值前建议钉死具体版本,别名会随发布漂移",
+    "default": ""
+  },
+  "JEV_ENDPOINT": {
+    "description": "Jev 接口地址",
+    "type": "string",
+    "default": ""
+  },
+  "JEV_TIMEOUT_SECONDS": {
+    "description": "Jev 调用超时(秒)",
+    "type": "float",
+    "hint": "超时/报错一律静默回落到本地判定,不会挂住应答链路",
+    "default": 5.0
+  },
+  "JEV_ANSWERABLE": {
+    "description": "Jev Noul:这堆材料答不答得上用户这个问题(绝对门槛,两处共用)",
+    "type": "float",
+    "hint": "实测(2026-09-26,本语料):闲聊最高 0.19、真问最低 0.45,该门槛对「是否本领域」的判别稳定",
+    "default": 0.50
+  },
+  "JEV_TAKEOVER_PROBABILITY": {
+    "description": "C 位点:Choice 概率门槛(最对的那条要够高才自己答)",
+    "type": "float",
+    "hint": "刻意偏低——误判「有把握」的代价只是回一句模糊指引,误判「没把握」是该答的问题静默",
+    "default": 0.35
+  },
+  "JEV_LINK_PROBABILITY": {
+    "description": "D 位点:Choice 概率门槛(章节够格才附链接)",
+    "type": "float",
+    "hint": "刻意高于 C——附链是对用户的承诺,发错章节的代价是信任(2026-09-15 事故形态)",
+    "default": 0.45
+  },
   "LEARN_CONTEXT_MESSAGES": {
     "description": "/learn 分析的最近消息条数上限",
     "type": "int",
