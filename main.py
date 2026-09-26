@@ -27,7 +27,7 @@ from .answer.direct import (
 )
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
-from .corpus.model import normalize_title
+from .corpus.model import extract_symptom_tags, normalize_title
 from .corpus.parser import parse_xml
 from .jev.client import DEFAULT_ENDPOINT as DEFAULT_JEV_ENDPOINT
 from .jev.client import DEFAULT_MODEL as DEFAULT_JEV_MODEL
@@ -97,7 +97,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.5",
+    "0.9.6",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -272,7 +272,15 @@ class FeishuQaPlugin(Star):
         return result
 
     def _log_jev(self, decision: JevDecision, *, stage: str, question: str, action: str) -> None:
-        """Jev 判定落决策日志。概率值一并记录,便于事后回看阈值是否合理。"""
+        """Jev 判定落决策日志,并打一行 INFO。
+
+        决策日志在 data/plugin_data/ 下,WebUI 不好回读;而"这次到底按 Jev
+        还是按本地规则做的决定"是最需要一眼可见的事,故同时落日志。
+        """
+        logger.info(
+            "[FeishuQA] Jev 决策 stage=%s action=%s reason=%s picked=%s",
+            stage, action, decision.reason, ",".join(decision.entry_ids) or "-",
+        )
         self._log_decision(
             stage=stage,
             action=action,
@@ -334,20 +342,26 @@ class FeishuQaPlugin(Star):
         return True
 
     def _jev_selfcheck(self) -> None:
-        """启动时自检一次 Jev 连通性,结果写日志。
+        """启动时自检 Jev,并跑一遍**完整决策链**做金丝雀,结果写日志。
 
-        动机:改完 `JEV_API_KEY` 之后,管理员最需要的是**立刻**知道能不能用,
-        而不是等第一条真实提问才发现鉴权失败或容器出不了网——那时的表现是
-        "静默回落到本地判定",看起来像功能没生效,实则可能只是 key 过期。
+        动机有两层:
+        1. 改完 `JEV_API_KEY` 之后,管理员最需要的是**立刻**知道能不能用,而不是
+           等第一条真实提问才发现鉴权失败或容器出不了网——那时的表现是"静默
+           回落���本地判定",看起来像功能没生效,实则可能只是 key 过期。
+        2. 只探活不够:连通 ≠ 判定链路通。这里用一条**自带已知答案**的探针
+           问题跑 ``router.route → Jev → decide_takeover → 落决策日志``,
+           因此每次重启都会在 ``decisions.jsonl`` 里留下一条 ``jev_selftest``
+           记录,既能看 Jev 通不通,也能看它**是否真的改变了结论**。
 
-        只发一个极小的 Noul,不碰语料、不影响任何用户路径;失败只告警,
-        插件照常以本地判定服务。
+        探针问题取自语料里第一条带问号的条目标题,因此**不依赖固定文案**,
+        语料换了仍然有效。失败只告警,插件照常以本地判定服务。
         """
         if self._jev is None:
             return
+        probe = self._jev_probe_query()
         try:
             result = self._jev.evaluate(
-                state={"question": "Cakewalk 无法激活", "candidates": []},
+                state={"question": probe or "Cakewalk 无法激活", "candidates": []},
                 questions={
                     "ping": noul_question(
                         "Is the user asking about a Cakewalk software problem?",
@@ -370,6 +384,76 @@ class FeishuQaPlugin(Star):
             result.model,
             result.noul("ping") or 0.0,
             result.input_tokens,
+        )
+        self._jev_selftest_chain(probe)
+
+    def _jev_probe_query(self) -> str:
+        """从语料里取一条带问号的标题作为探针问题(不依赖写死文案)。"""
+        for entry in self._entries[:20]:
+            _, stripped = extract_symptom_tags(entry.raw_title)
+            q = stripped.split("？")[0].split("?")[0].strip()
+            if len(q) >= 6:
+                return q
+        return ""
+
+    def _jev_selftest_chain(self, question: str) -> None:
+        """金丝雀:跑完整决策链,落一条 jev_selftest 决策记录。
+
+        记录里同时写本地结论与 Jev 结论,便于一眼看出 Jev 有没有改变动作。
+        全程不发消息、不阻断、只写自己的决策日志。
+        """
+        router = self._router
+        if router is None or not question:
+            return
+        try:
+            plan = router.route(
+                question, group_id="__selftest__", umo="", top_k=_JEV_MAX_CANDIDATES
+            )
+            entries = [r.entry for r in plan.candidates]
+            cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
+            result = self._jev_ask(question, cands)
+        except Exception as exc:
+            logger.warning("[FeishuQA] Jev 决策链自检异常: %s", type(exc).__name__)
+            return
+        if result is None or not result.ok or not entries:
+            logger.info("[FeishuQA] Jev 决策链自检跳过(无可用候选或 Jev 不可用)")
+            return
+
+        decision = decide_takeover(
+            cands,
+            result,
+            answerable_threshold=float(self._cfg("JEV_ANSWERABLE", 0.50)),
+            probability_threshold=float(self._cfg("JEV_TAKEOVER_PROBABILITY", 0.35)),
+        )
+        local_pick = entries[0].id if entries else ""
+        changed = decision.action == ACTION_ANSWER_SELF and bool(
+            decision.entry_ids
+        ) and local_pick not in decision.entry_ids
+        self._log_decision(
+            stage="route",
+            action="jev_selftest",
+            query=question,
+            results=plan.candidates,
+            extra={
+                "jev_action": decision.action,
+                "jev_reason": decision.reason,
+                "jev_nouls": {k: round(v, 4) for k, v in decision.nouls.items()},
+                "jev_probs": decision.probabilities,
+                "jev_picked": list(decision.entry_ids),
+                "local_kind": plan.kind,
+                "local_top1": local_pick,
+                "local_score": round(plan.score, 3),
+                "changed_vs_local": changed,
+            },
+        )
+        logger.info(
+            "[FeishuQA] Jev 决策链自检: local=%s(score=%.2f) jev=%s(%s)%s picked=%s",
+            plan.kind,
+            plan.score,
+            decision.action,
+            decision.reason,
+            " [与本地不同]" if changed else "",
+            ",".join(decision.entry_ids) or "-",
         )
 
     def _jev_filter_links(
@@ -964,22 +1048,21 @@ class FeishuQaPlugin(Star):
         if router is None:
             yield event.plain_result("语料尚未就绪,请先 /qa_sync")
             return
-        plan = router.route(
-            question,
-            group_id=event.get_group_id(),
-            umo=event.unified_msg_origin,
-            top_k=_JEV_MAX_CANDIDATES,
-        )
-        entries = [r.entry for r in plan.candidates]
+        # 诊断命令**不受群白名单约束**:私聊(C2C)下 get_group_id() 为 None,
+        # 走 router 会被判 denied,管理员反而在自己的私聊里看不到诊断结果。
+        # 这里直接用检索器取候选,只为拿概率,不做任何投递。
+        results = self._retriever.search(question, top_k=_JEV_MAX_CANDIDATES)
+        entries = [r.entry for r in results]
         cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
         result = self._jev_ask(question, cands)
+        local_kind = f"local_top1_score={results[0].score:.2f}" if results else "no_hit"
 
         ans_t = float(self._cfg("JEV_ANSWERABLE", 0.50))
         take_t = float(self._cfg("JEV_TAKEOVER_PROBABILITY", 0.35))
         link_t = float(self._cfg("JEV_LINK_PROBABILITY", 0.45))
         lines = [
             f"问题: {question}",
-            f"本地判定: {plan.kind} (score={plan.score:.2f})",
+            f"本地检索: {local_kind}",
             f"阈值: answerable>={ans_t}  takeover>={take_t}  link>={link_t}",
         ]
         if result is None or not result.ok:

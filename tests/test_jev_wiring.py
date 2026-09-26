@@ -416,6 +416,29 @@ class TestJevProbe:
         text = _probe_result(p, self._admin_event())[0][1]
         assert "不可用" in text and "回落" in text
 
+    def test_probe_bypasses_group_whitelist(self, make_plugin, monkeypatch) -> None:
+        """私聊(C2C)下 get_group_id() 为 None,走 router 会被判 denied。
+        诊断命令必须仍能出结果,否则管理员在自己的私聊里看不到。"""
+        _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k", ENABLED_GROUPS=["grp_x"])
+        ev = self._admin_event()
+        ev._group_id = None          # 私聊
+        ev.unified_msg_origin = "inst:FriendMessage:u1"
+        text = _probe_result(p, ev)[0][1]
+        assert "denied" not in text
+        assert "answerable" in text
+
+    def test_decision_logged_at_info(self, make_plugin, monkeypatch, caplog) -> None:
+        """决策必须同时进日志,否则 plugin_data 里的记录在面板上回读不了。"""
+        import logging as _logging
+
+        _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        with caplog.at_level(_logging.INFO):
+            _run(p.on_group_message(_at_event()))
+        assert any("Jev 决策" in r.getMessage() for r in caplog.records), \
+            "Jev 决策未进日志"
+
     def test_probe_never_sends_to_group(self, make_plugin, monkeypatch) -> None:
         """诊断命令只回显给提问者,不得向群里发内容、不得阻断。"""
         _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
@@ -424,3 +447,45 @@ class TestJevProbe:
         _probe_result(p, ev)
         assert ev.sent == [], "诊断命令不得投递消息"
         assert ev.stopped is False, "诊断命令不得阻断流水线"
+
+
+# ── 启动自检:决策链金丝雀 ──
+
+
+class TestSelfTestChain:
+    def test_probe_query_derived_from_corpus(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        q = p._jev_probe_query()
+        assert len(q) >= 6, "探针问题应取自语料标题"
+        assert not q.endswith(("？", "?")), "探针应去掉句末问号"
+
+    def test_selftest_writes_jev_record(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, _answer([0.10, 0.80, 0.10]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        p._jev_selftest_chain(p._jev_probe_query())
+        rows = [r for r in _decisions(p) if r["action"] == "jev_selftest"]
+        assert rows, "决策链自检必须落一条 jev_selftest 记录"
+        assert "jev_probs" in rows[-1]["extra"]
+        assert "changed_vs_local" in rows[-1]["extra"]
+
+    def test_selftest_detects_divergence_from_local(self, make_plugin, monkeypatch) -> None:
+        """Jev 选中非本地 top-1 时,changed_vs_local 必须为 True。"""
+        _patch_jev(monkeypatch, _answer([0.05, 0.05, 0.90]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        p._jev_selftest_chain(p._jev_probe_query())
+        row = [r for r in _decisions(p) if r["action"] == "jev_selftest"][-1]
+        assert row["extra"]["jev_action"] == "answer_self"
+        assert row["extra"]["changed_vs_local"] is True
+
+    def test_selftest_survives_jev_outage(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, raises=TimeoutError())
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k")
+        p._jev_selftest_chain(p._jev_probe_query())  # 不得抛
+        assert not [r for r in _decisions(p) if r["action"] == "jev_selftest"]
+
+    def test_selftest_noop_when_disabled(self, make_plugin, monkeypatch) -> None:
+        _patch_jev(monkeypatch, _answer([0.9, 0.05, 0.05]))
+        p = make_plugin(JEV_ENABLED=False, JEV_API_KEY="")
+        p._jev_selfcheck()  # 不得抛,也不得调 Jev
+        assert _decisions(p) == []
