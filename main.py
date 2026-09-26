@@ -20,11 +20,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
 from .adapter.gateway import DOC_FORMAT_XML, GatewayClient
-from .answer.direct import (
-    DirectAnswer,
-    format_entry_link_lines,
-    format_tentative_links,
-)
+from .answer.direct import DirectAnswer, format_link_list
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
 from .corpus.model import extract_symptom_tags, normalize_title
@@ -100,7 +96,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.10",
+    "0.9.11",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -839,76 +835,75 @@ class FeishuQaPlugin(Star):
                 多个用英文逗号分隔
         """
         wanted = [s for s in re.split(r"[,，、;\s]+", entry_ids or "") if s.strip()]
-        entries, skipped, seen = [], [], set()
+        entries, invalid, seen = [], [], set()
         for raw in wanted:
             # 魔法短码(Modu ADR-011):知识块携带的引用码 → 语料条目;
             # 完整条目 ID 亦接受。映射外取值一律拒绝,模型无法猜测绕过。
             entry = self._entry_refs.get(raw)
             if entry is None:
-                skipped.append(raw)
+                invalid.append(raw)
                 continue
             if entry.id in seen:
                 continue
             seen.add(entry.id)
             entries.append(entry)
+        skipped = list(invalid)
+
+        # 会话级去重:自动附链(auto_send_faq_links / Jev 闸门)已经发过的条目,
+        # 模型再点一次不再重发。线上实测 2026-09-27:用户问"cakewalk 打不开了",
+        # Jev 闸门发出【打开就闪退】,主 Agent 随后又调 qa_send_answer 重发同一条,
+        # 用户收到两条内容重复的链接消息。此处补齐去重,跳过项照实回报给模型。
+        already = set(event.get_extra("_faq_links_sent") or ())
+        duplicated: list[str] = []
+        if already:
+            fresh = [e for e in entries if e.id not in already]
+            duplicated = [e.raw_title[:16] for e in entries if e.id in already]
+            entries = fresh
         if not entries:
-            bad = ",".join(skipped) if skipped else "未提供有效条目"
+            if duplicated:
+                detail = ",".join(duplicated + invalid)
+                return f"未重复投递:这轮问里已发过({detail})"
+            bad = ",".join(invalid) if invalid else "未提供有效条目"
             return f"发送失败:没有可投递的条目({bad})"
 
-        # v0.7.4 曾因 source_locator 为空误判"markdown 渲染剥锚点"而全面
-        # 回退裸链接;with-ids 修复后锚点真实可用,qq_official 恢复原生
-        # markdown 超链接(msg_type=2 默认渲染,标题可点击)。其他平台
-        # (OneBot 纯文本)维持"标题行 + 👉 裸链接"避免字面量输出。
-        platform_name = ""
-        with contextlib.suppress(Exception):
-            platform_name = str(event.get_platform_name() or "")
-
-        lines = [f"命中 {len(entries)} 条肖闻的解答:"]
-        lines += format_entry_link_lines(
-            entries,
-            url_of=self._wiki_block_url,
-            markdown=platform_name == "qq_official",
-            leading_newline=True,
-            url_on_newline=True,
-        )
-        lines.append("\n > Xiaowenn《有福同享全家桶Q&A汇总》")
-        direct = DirectAnswer(
-            text="\n".join(lines), image_paths=[], entry_id=entries[0].id
-        )
+        direct = self._format_links(event, entries)
         # 单次 event.send 投出整块;经此而非 set_result:Agent 循环保持存活。
         await self._send_direct(event, direct)
         note = f";已跳过:{','.join(skipped)}" if skipped else ""
+        if duplicated:
+            note += f";已发过不重发:{','.join(duplicated)}"
         titles = "》《".join(normalize_title(e.raw_title) for e in entries)
         return (
             f"已投递{len(entries)}条章节直达链接:《{titles}》{note};"
             "请勿复述条目正文,链接里含图文步骤。"
         )
 
-    def _build_link_list(self, event, entries: list) -> DirectAnswer:
-        """条目列表 → 链接列表载荷(qq_official 用 markdown 超链接,其余裸链接)。"""
-        platform_name = ""
-        with contextlib.suppress(Exception):
-            platform_name = str(event.get_platform_name() or "")
-        lines = [f" >  直接命中 {len(entries)} 条肖闻的解答: \n"]
-        md = platform_name == "qq_official"
-        lines += format_entry_link_lines(
-            entries, url_of=self._wiki_block_url, markdown=md
-        )
-        lines.append("\n > Xiaowenn《有福同享全家桶Q&A汇总》")
-        return DirectAnswer(
-            text="\n".join(lines), image_paths=[], entry_id=entries[0].id
-        )
+    def _format_links(self, event, entries: list) -> DirectAnswer:
+        """所有用户可见链接消息的唯一出口。
 
-    def _build_tentative_list(self, event, entries: list) -> DirectAnswer:
-        """模糊档:章节指引列表(措辞见 format_tentative_links)。"""
+        四条投递路径(高置信直答 / 模糊档 / LLM 工具投递 / 自动附链)曾各写各
+        的头部与尾部,线上一次回答里能同时看到三种格式,用户无从判断"这是不
+        是同一种东西"。措辞与版式全部收口到 ``format_link_list``。
+        """
         platform_name = ""
         with contextlib.suppress(Exception):
             platform_name = str(event.get_platform_name() or "")
-        return format_tentative_links(
+        return format_link_list(
             entries,
             url_of=self._wiki_block_url,
             markdown=platform_name == "qq_official",
         )
+
+    def _build_link_list(self, event, entries: list) -> DirectAnswer:
+        """章节链接列表(直答路径;与其它路径共用同一格式)。"""
+        return self._format_links(event, entries)
+
+    def _build_tentative_list(self, event, entries: list) -> DirectAnswer:
+        """模糊档的章节链接列表——与直答/工具/自动附链格式完全一致。
+
+        保留方法名只为让 C 位点的调用点自解释;它不再有任何独立措辞。
+        """
+        return self._format_links(event, entries)
 
     def _wiki_block_url(self, entry) -> str:
         """构造飞书文档锚点直达链接(WIKI_URL#block_id);无定位时退回整篇。"""
@@ -1023,18 +1018,7 @@ class FeishuQaPlugin(Star):
                 "titles": [e.raw_title for e in new_entries],
             },
         )
-        platform_name = ""
-        with contextlib.suppress(Exception):
-            platform_name = str(event.get_platform_name() or "")
-        md_mode = platform_name == "qq_official"
-        lines = ["📎 以上解答的文档直达章节:"]
-        lines += format_entry_link_lines(
-            new_entries, url_of=self._wiki_block_url, markdown=md_mode
-        )
-        direct = DirectAnswer(
-            text="\n".join(lines), image_paths=[], entry_id=new_entries[0].id
-        )
-        await self._send_direct(event, direct)
+        await self._send_direct(event, self._format_links(event, new_entries))
         event.set_extra("_faq_links_sent", sent)
 
     @filter.on_llm_request()

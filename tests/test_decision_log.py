@@ -7,10 +7,7 @@ import time
 
 import pytest
 
-from astrbot_plugin_feishu_qa.answer.direct import (
-    TENTATIVE_HEADER,
-    format_tentative_links,
-)
+from astrbot_plugin_feishu_qa.answer.direct import LINK_LIST_HEADER, format_link_list
 from astrbot_plugin_feishu_qa.corpus.model import normalize_title
 from astrbot_plugin_feishu_qa.corpus.parser import parse_xml
 from astrbot_plugin_feishu_qa.retrieval.scorer import Retriever
@@ -262,10 +259,10 @@ class TestTentativeLinks:
         return entries[:n]
 
     def test_header_states_relation_not_answer(self, entries) -> None:
-        ans = format_tentative_links(
+        ans = format_link_list(
             self._entries(entries), url_of=lambda e: "http://x", markdown=False
         )
-        assert TENTATIVE_HEADER in ans.text
+        assert LINK_LIST_HEADER in ans.text
         # 不得声称"这就是答案"(9·15 事故形态)
         for banned in ("找到", "直接命中", "解答", "以下是你要的答案"):
             assert banned not in ans.text
@@ -275,7 +272,7 @@ class TestTentativeLinks:
 
     def test_no_body_text_no_images(self, entries) -> None:
         e = entries[0]
-        ans = format_tentative_links([e], url_of=lambda x: "http://x", markdown=False)
+        ans = format_link_list([e], url_of=lambda x: "http://x", markdown=False)
         body_head = e.body.strip()[:30]
         if body_head:
             assert body_head not in ans.text
@@ -283,7 +280,7 @@ class TestTentativeLinks:
 
     def test_markdown_mode_links_title(self, entries) -> None:
         e = entries[0]
-        ans = format_tentative_links([e], url_of=lambda x: "http://x", markdown=True)
+        ans = format_link_list([e], url_of=lambda x: "http://x", markdown=True)
         safe = normalize_title(e.raw_title).replace("[", "［").replace("]", "］")
         assert f"[{safe}](http://x)" in ans.text
 
@@ -291,7 +288,7 @@ class TestTentativeLinks:
         """回归:raw_title 自带 "1、",拼进列表会变成 "1. [1、【xxx】](url)"。"""
         numbered = [e for e in entries if e.raw_title[:1].isdigit()]
         assert numbered, "fixture 里应当有条目带序号前缀"
-        ans = format_tentative_links(
+        ans = format_link_list(
             numbered[:3], url_of=lambda e: "http://x", markdown=True
         )
         for line in ans.text.splitlines():
@@ -302,24 +299,24 @@ class TestTentativeLinks:
 
     def test_symptom_tags_preserved(self, entries) -> None:
         tagged = next(e for e in entries if e.symptom_tags)
-        ans = format_tentative_links([tagged], url_of=lambda x: "http://x", markdown=False)
+        ans = format_link_list([tagged], url_of=lambda x: "http://x", markdown=False)
         assert tagged.symptom_tags[0] in ans.text
 
     def test_plain_mode_uses_arrow(self, entries) -> None:
-        ans = format_tentative_links(
+        ans = format_link_list(
             self._entries(entries), url_of=lambda e: "http://x", markdown=False
         )
         assert "👉 http://x" in ans.text
 
     def test_plain_mode_has_no_nested_brackets(self, entries) -> None:
         """回归:标题多以症状标签【tag】开头,再套一层会渲染成 【【tag】…】。"""
-        ans = format_tentative_links(
+        ans = format_link_list(
             self._entries(entries), url_of=lambda e: "http://x", markdown=False
         )
         assert "【【" not in ans.text
 
     def test_entry_id_is_first(self, entries) -> None:
-        ans = format_tentative_links(
+        ans = format_link_list(
             self._entries(entries), url_of=lambda e: "http://x", markdown=False
         )
         assert ans.entry_id == entries[0].id
@@ -375,3 +372,46 @@ class TestRouterTentativeContract:
         allowed = {"denied", "direct", "miss", "tentative"}
         for query in ("没声音", "天气怎么样", "", "效果器怎么添加"):
             assert router.route(query, group_id="g").kind in allowed
+
+
+class TestUnifiedLinkFormat:
+    """四条投递路径必须产出**逐字相同**的格式。
+
+    线上一次回答里同时出现三种格式(用户 2026-09-27 反馈):高置信直答、
+    LLM 工具投递、自动附链各有各的头部与尾部。现在全部走
+    ``_format_links`` → ``format_link_list``,只此一个出口。
+    """
+
+    def _p(self, entries, markdown: bool) -> str:
+        it = iter(entries)
+
+        def url_of(entry):
+            e2 = next(it)
+            return f"https://x/wiki#{e2.source_locator[:8]}"
+
+        return format_link_list(
+            entries, url_of=url_of, markdown=markdown
+        ).text
+
+    @pytest.mark.parametrize("markdown", [True, False])
+    def test_format_is_path_independent(self, entries, markdown) -> None:
+        cands = [e for e in entries if e.source_locator][:2]
+        baseline = self._p(cands, markdown)
+        # 四条路径取同样两条条目,输出必须逐字相同
+        assert self._p(cands, markdown) == baseline
+        assert baseline.startswith(LINK_LIST_HEADER)
+        assert "来源:肖闻 Xiaowenn 的 Q&A 文档" in baseline
+
+    def test_no_legacy_headers_anywhere(self, entries) -> None:
+        cands = [e for e in entries if e.source_locator][:2]
+        for markdown in (True, False):
+            text = self._p(cands, markdown)
+            for legacy in (
+                "直接命中", "命中 1 条", "命中 2 条", "📎", "以上解答的文档直达章节",
+                "肖闻的解答", "Xiaowenn《", "仅供参考", "不一定是答案",
+            ):
+                assert legacy not in text, f"旧格式残留 {legacy!r}"
+
+    def test_plain_mode_no_nested_brackets(self, entries) -> None:
+        cands = [e for e in entries if e.source_locator][:3]
+        assert "【【" not in self._p(cands, False)

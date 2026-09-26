@@ -10,14 +10,14 @@ from ..storage.snapshot import SnapshotStore
 
 SOURCE_ATTRIBUTION = "来源:肖闻 Xiaowenn 的 Q&A 文档"
 
-# 模糊档措辞:命中 MEDIUM 区时使用。
+# 用户可见链接消息的**唯一**头部/尾部。
 #
 # 只声明"相关",不声明"是答案"——两者不是一回事,而把"相关"说成"答案"正是
 # 2026-09-15 事故的形态(承诺了"你的问题在这里有答案"却给错章节)。
-# 但也**不再加"仅供参考/不一定是答案"这类免责**:是否放行已经由 Jev 的置信
-# 闸门决定(answerable>=0.50 且最对候选 P>=0.35),让文案再兜一遍是把同一件事
-# 说两遍,读起来像在推卸。闸门管安全,文案管表达。
-TENTATIVE_HEADER = "以下章节与你的问题相关:"
+# 但也**不加"仅供参考/不一定是答案"这类免责**:是否放行由 Jev 置信闸门决定
+# (answerable>=0.50 且最对候选 P>=0.35),文案再兜一遍是把同一件事说两遍。
+# 闸门管安全,文案管表达。
+LINK_LIST_HEADER = "以下章节与你的问题相关:"
 
 
 @dataclass
@@ -70,14 +70,12 @@ def format_entry_link_lines(
     *,
     url_of,
     markdown: bool,
-    leading_newline: bool = False,
-    url_on_newline: bool = False,
 ) -> list[str]:
     """条目列表 → 有序链接行。**全部链接渲染的唯一来源**。
 
     四个投递路径(高置信直答 / 自动附链 / LLM 工具投递 / 模糊档)此前各自
-    复制了一份这段渲染逻辑,于是"标题自带序号前缀"这个缺陷需要改四处才
-    修得干净,现在已经漏修过一轮。收敛到这里后,序号与括号处理只存一份。
+    复制了一份渲染逻辑,而且**连头部和尾部都不一样**——线上一次回答里同时
+    出现三种格式。现在头部/条目/尾部全部收口到 ``format_link_list``。
 
     ``raw_title`` 自带 "1、"/"2.1、" 序号前缀(UP 主在文档里手工编号,会
     随增删条目漂移)。直接拼进有序列表会渲染成 "1. [1、【xxx】](url)" 的
@@ -93,34 +91,34 @@ def format_entry_link_lines(
     for i, entry in enumerate(entries, 1):
         url = url_of(entry)
         title = normalize_title(entry.raw_title)
-        nl = "\n" if leading_newline else ""
         if markdown:
             safe_title = title.replace("[", "［").replace("]", "］")
-            lines.append(f"{nl}{i}. [{safe_title}]({url})")
-        elif url_on_newline:
-            lines.append(f"{nl}{i}、{title}")
-            lines.append(f"👉 {url}")
+            lines.append(f"{i}. [{safe_title}]({url})")
         else:
-            lines.append(f"{nl}{i}、{title}👉 {url}")
+            # 标题本身多以症状标签 【xxx】 开头,再套一层会渲染成 【【xxx】…】。
+            lines.append(f"{i}、{title}👉 {url}")
     return lines
 
 
-def format_tentative_links(
+def format_link_list(
     entries: list[QaEntry],
     *,
     url_of,
     markdown: bool,
     attribution: str = SOURCE_ATTRIBUTION,
 ) -> DirectAnswer:
-    """模糊档:只给章节指引,不给正文、不给图、不作断言。
+    """章节链接列表 —— **用户可见链接消息的唯一格式**。
 
-    与 ``format_direct_answer`` 的区别是刻意的:
-      - 不贴 ``entry.body``——正文投递等于在替用户下"这就是答案"的结论;
-      - 不附图——图片是手册里逐步骤的截图,脱离正文语境更容易误导;
-      - 措辞用 ``TENTATIVE_HEADER``,不含"找到/直接命中/解答"。
-    中间档的定位是"给你个可能的方向",因此不追求完整性,只追求不越界。
+    四条投递路径(高置信直答 / 模糊档 / LLM 工具投递 / 自动附链)现在共用
+    同一套头部、条目与尾部。此前它们各有各的措辞,一次回答里能同时看到
+    三种格式,用户无从判断"这是不是同一种东西"。
+
+    措辞只声明"相关",不声明"是答案"——把"相关"说成"答案"正是 2026-09-15
+    事故的形态(承诺了"你的问题在这里有答案"却给错章节)。也**不加免责
+    话术**:是否放行已由 Jev 置信闸门决定(见 jev/policy.py),文案再兜一遍
+    是把同一件事说两遍。**闸门管安全,文案管表达。**
     """
-    lines = [TENTATIVE_HEADER, ""]
+    lines = [LINK_LIST_HEADER, ""]
     lines += format_entry_link_lines(entries, url_of=url_of, markdown=markdown)
     lines.extend(["", f"> {attribution}"])
     return DirectAnswer(

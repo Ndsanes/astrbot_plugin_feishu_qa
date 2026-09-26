@@ -183,7 +183,7 @@ class TestQaSendAnswer:
             event, "get_platform_name", lambda: "qq_official", raising=False
         )
         out = run_handler(plugin.qa_send_answer(event, entry_ids=entry.id))
-        assert isinstance(out[0], str) and "直达链接" in out[0] and "勿复述" in out[0]
+        assert isinstance(out[0], str) and "勿复述" in out[0]
         assert len(event.sent) == 1
         all_text = "".join(
             c[1]
@@ -195,8 +195,9 @@ class TestQaSendAnswer:
             f"(https://my.feishu.cn/wiki/test#{entry.source_locator})"
         )
         assert expected in all_text
-        assert "命中 1 条肖闻的解答" in all_text
-        assert "Xiaowenn《有福同享全家桶Q&A汇总》" in all_text
+        # 四条投递路径统一格式后,头部只有这一个
+        assert "以下章节与你的问题相关:" in all_text
+        assert "来源:肖闻 Xiaowenn 的 Q&A 文档" in all_text
         # 回归:raw_title 自带 "1、",直接拼进列表会渲染成 "1. [1、【x】](url)"
         assert f"[{entry.raw_title}]" not in all_text
 
@@ -210,8 +211,7 @@ class TestQaSendAnswer:
         all_text = "".join(
             c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
         )
-        # qa_send_answer 的裸链接分支把 URL 放在标题下一行
-        assert f"、{normalize_title(entry.raw_title)}\n👉 " in all_text
+        assert f"、{normalize_title(entry.raw_title)}👉 " in all_text
         assert f"👉 https://my.feishu.cn/wiki/test#{entry.source_locator}" in all_text
         assert "](" not in all_text, "非官方平台不得输出 markdown 字面量"
         # 回归:裸链接分支不得把条目自身序号拼进列表,也不得给已带症状标签的
@@ -801,3 +801,46 @@ class TestCommandTextNotTreatedAsQuestion:
         run_handler(plugin.on_group_message(event))
         assert len(event.sent) == 1, "普通提问仍应走直答"
         assert event.stopped is True
+
+
+class TestQaSendAnswerDedup:
+    """会话级去重:自动附链已发过的条目,模型再点不再重发。
+
+    线上实测 2026-09-27:用户问"cakewalk 打不开了",Jev 闸门发出【打开就闪退】,
+    主 Agent 随后又调 qa_send_answer 重发同一条,用户收到两条重复的链接消息。
+    `qa_send_answer` 原先从不检查 `_faq_links_sent`——那是自动附链专用的。
+    """
+
+    def test_skips_entry_already_sent_by_auto_links(self, plugin: FeishuQaPlugin) -> None:
+        entry = next(e for e in plugin._entries if e.source_locator)
+        event = AstrMessageEvent(message_str="cakewalk打不开了")
+        event.set_extra("_faq_links_sent", {entry.id})
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=entry.id))
+        assert "未重复投递" in out[0]
+        assert event.sent == [], "已发过的条目不得重复投递"
+
+    def test_still_sends_fresh_entries(self, plugin: FeishuQaPlugin) -> None:
+        picks = [e for e in plugin._entries if e.source_locator][:2]
+        event = AstrMessageEvent(message_str="问题")
+        event.set_extra("_faq_links_sent", {picks[0].id})
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=",".join(p.id for p in picks)))
+        assert "已投递1条" in out[0], "只应投递未发过的那条"
+        assert len(event.sent) == 1
+        text = "".join(
+            c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
+        )
+        assert picks[1].source_locator in text
+        assert picks[0].source_locator not in text
+
+    def test_unknown_code_still_rejected(self, plugin: FeishuQaPlugin) -> None:
+        event = AstrMessageEvent(message_str="x")
+        out = run_handler(plugin.qa_send_answer(event, entry_ids="zzzzz"))
+        assert "没有可投递" in out[0]
+        assert event.sent == []
+
+    def test_no_prior_sends_unchanged(self, plugin: FeishuQaPlugin) -> None:
+        picks = [e for e in plugin._entries if e.source_locator][:2]
+        event = AstrMessageEvent(message_str="问题")
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=",".join(p.id for p in picks)))
+        assert "已投递2条" in out[0]
+        assert len(event.sent) == 1
