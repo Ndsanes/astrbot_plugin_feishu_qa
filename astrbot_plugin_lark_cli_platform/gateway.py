@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,40 @@ def _wrap(exc: Exception) -> LarkGatewayError:
     if isinstance(exc, LarkGatewayError):
         return exc
     return LarkGatewayError(str(exc))
+
+
+# CLI 回报产物的键随子命令而异(2026-09-27 实测 lark-cli 1.0.85):
+# `drive +preview` 报 `output_path`,`docs +media-preview` 报 `saved_path`。
+# 只认其一 → "下载成功"被误判为失败,且产物滞留在 dest_dir 成为毒源。
+_ARTIFACT_KEYS = ("saved_path", "output_path", "path")
+
+
+def _reported_artifact(data: Any) -> str | None:
+    """从回包 data 中取出 CLI 回报的产物路径(无则 None)。"""
+    if not isinstance(data, dict):
+        return None
+    for key in _ARTIFACT_KEYS:
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _resolve_artifact(reported: str | None, dest_dir: Path, stem: str) -> Path | None:
+    """定位下载产物:先信 CLI 回报路径,再按 ``stem*`` 前缀在 dest_dir 内回捞。
+
+    回捞兜底覆盖两类实况:CLI 换了扩展名/改写文件名,以及回报的是相对路径
+    (AstrBot 进程 CWD ≠ dest_dir)。只收非空普通文件。
+    """
+    candidates: list[Path] = []
+    if reported:
+        found = Path(reported)
+        candidates.append(found if found.is_absolute() else dest_dir / found)
+    candidates.extend(sorted(dest_dir.glob(f"{stem}*")))
+    for cand in candidates:
+        if cand.is_file() and cand.stat().st_size > 0:
+            return cand
+    return None
 
 
 class LarkGateway:
@@ -235,17 +270,22 @@ class LarkGateway:
 
         依次尝试:drive +preview(source_file)→ drive +download →
         docs +media-preview(文档内嵌媒体专用,drive 直连 403 时仍可取图)。
+        产物名由 CLI 决定(``<token>.<ext>``),调用方按返回路径搬移/重命名。
         """
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        # lark-cli 要求 --output 为 cwd 内相对路径
-        out_name = f"./{file_token.replace('/', '_')}"
-        # 预清理历史残留产物:lark-cli 对已存在输出直接退出码 2(部分版本/子命令
-        # 连 --overwrite 都不生效),而调用方只在目标文件缺失时才会走到这里,
-        # 删除 token 命名的临时产物是安全幂等语义。
-        stale = dest_dir / Path(out_name).name
-        if stale.exists():
-            stale.unlink()
+        # lark-cli 要求 --output 为 cwd 内相对路径,且**产物名由 CLI 追加扩展名**
+        # (--output ./TOK → 实际落盘 ./TOK.png),故清理与回捞都按 ``TOK*`` 前缀匹配。
+        stem = file_token.replace("/", "_")
+        out_name = f"./{stem}"
+        # 预清理同 token 的历史残留:lark-cli 遇到已存在输出直接 validation
+        # failed_precondition 退出(2026-09-27 事故:残留未清 → 此后每轮同步
+        # 三条命令全部 already exists,图片永久缺失)。同名产物只可能是上一轮
+        # 下载的半成品,删除是安全幂等语义;overwrite=True 时交给 CLI 开关覆盖。
+        if not overwrite:
+            for stale in dest_dir.glob(f"{stem}*"):
+                with contextlib.suppress(OSError):
+                    stale.unlink()
 
         def _drive_cmd(kind: str) -> list[str]:
             return [
@@ -262,6 +302,11 @@ class LarkGateway:
                 ),
                 "--output",
                 out_name,
+                # 子命令的冲突开关名不一致(1.0.85 实测):preview 是
+                # --if-exists,download 是 --overwrite。传错/不传都会被
+                # 已有产物顶掉,故逐条给对;不认识的开关只会让该条失败并
+                # 顺延到下一条,不会污染其他路径。
+                *(["--if-exists", "overwrite"] if kind == "+preview" else ["--overwrite"]),
             ]
 
         commands = (
@@ -277,6 +322,7 @@ class LarkGateway:
                 file_token,
                 "--output",
                 out_name,
+                "--overwrite",
             ],
         )
         envelope: Any = None
@@ -300,20 +346,24 @@ class LarkGateway:
                 raise _wrap(last_exc)
             # 失败留痕:此前静默返回 None 导致下游无法诊断(如缺图自愈空转)
             logger.warning(
-                "[lark_cli] media-download 两种方式均失败 token=%s: %s: %s",
+                "[lark_cli] media-download 全部通道均失败 token=%s: %s: %s",
                 file_token,
                 type(last_exc).__name__ if last_exc else "NoError",
                 last_exc,
             )
             return None
-        saved = envelope.data.get("saved_path") if isinstance(envelope.data, dict) else None
-        # CLI 以 cwd 相对路径回报产物;AstrBot 进程 CWD ≠ dest_dir,必须归位
-        path = (
-            Path(str(saved))
-            if Path(str(saved)).is_absolute() and Path(str(saved)).is_file()
-            else dest_dir / Path(out_name).name
-        )
-        return path if path.is_file() and path.stat().st_size > 0 else None
+        saved = _reported_artifact(envelope.data)
+        path = _resolve_artifact(saved, dest_dir, stem)
+        if path is None:
+            # 静默 None 会把"下载成功"误报成失败,并在 dest_dir 留下毒源,
+            # 使此后每轮同步都以 already exists 告终——必须留痕。
+            logger.warning(
+                "[lark_cli] media-download 报成功但未找到产物 token=%s 回包=%s 目录=%s",
+                file_token,
+                envelope.data,
+                dest_dir,
+            )
+        return path
 
     # ── 登录态 ──
 

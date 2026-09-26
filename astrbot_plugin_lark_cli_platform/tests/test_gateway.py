@@ -111,11 +111,12 @@ async def test_append_doc走临时文件并返回revision(monkeypatch, tmp_path:
 
 async def test_download_media_preview失败退回download(monkeypatch, tmp_path: Path):
     saved = tmp_path / "tok.png"
-    saved.write_bytes(b"png")
 
     def respond(call):
         if "+preview" in call["args"]:
             raise gw.LarkKitError("preview failed")
+        # 产物必须由本次 CLI 调用产出(而非调用前就存在,那会被预清理当残留删掉)
+        saved.write_bytes(b"png")
         return SimpleNamespace(
             ok=True, document={}, data={"saved_path": str(saved)}
         )
@@ -125,6 +126,74 @@ async def test_download_media_preview失败退回download(monkeypatch, tmp_path:
     assert out == saved
     joined = [" ".join(c["args"]) for c in calls]
     assert any("+preview" in j for j in joined) and any("+download" in j for j in joined)
+
+
+async def test_download_media认preview的output_path键(monkeypatch, tmp_path: Path):
+    """drive +preview 回报的是 output_path(非 saved_path),漏认即误判失败。"""
+
+    def respond(call):
+        saved = Path(call["cwd"]) / "tok.jpg"
+        saved.write_bytes(b"jpg")
+        return SimpleNamespace(ok=True, document={}, data={"output_path": str(saved)})
+
+    g, _, calls = make_gateway(monkeypatch, respond)
+    out = await g.download_media("tok", tmp_path)
+    assert out is not None and out.name == "tok.jpg"
+    assert calls[0]["args"][:2] == ["drive", "+preview"]
+
+
+async def test_download_media回捞无扩展名产物(monkeypatch, tmp_path: Path):
+    """CLI 只回报 stem+扩展名(或不回报)时,按 stem* 前缀回捞,不静默 None。"""
+
+    def respond(call):
+        (Path(call["cwd"]) / "tok.png").write_bytes(b"png")
+        return SimpleNamespace(ok=True, document={}, data={})
+
+    g, _, _ = make_gateway(monkeypatch, respond)
+    out = await g.download_media("tok", tmp_path)
+    assert out is not None and out.name == "tok.png"
+
+
+async def test_download_media清理带扩展名的残留产物(monkeypatch, tmp_path: Path):
+    """上一轮残留的 TOKEN.png 会让本轮三条通道全部 already exists(2026-09-27 事故)。"""
+    stale = tmp_path / "tok.png"
+    stale.write_bytes(b"stale")
+
+    def respond(call):
+        assert not stale.exists(), "残留必须在发起 CLI 前清掉"
+        saved = Path(call["cwd"]) / "tok.png"
+        saved.write_bytes(b"fresh")
+        return SimpleNamespace(ok=True, document={}, data={"output_path": str(saved)})
+
+    g, _, calls = make_gateway(monkeypatch, respond)
+    out = await g.download_media("tok", tmp_path)
+    assert out is not None and out.read_bytes() == b"fresh"
+    assert len(calls) == 1, "清理后首条通道即应成功"
+
+
+@pytest.mark.parametrize(
+    ("head", "expected"),
+    [
+        (["drive", "+preview"], ["--if-exists", "overwrite"]),
+        (["drive", "+download"], ["--overwrite"]),
+        (["docs", "+media-preview"], ["--overwrite"]),
+    ],
+)
+async def test_download_media覆盖开关逐通道正确(monkeypatch, tmp_path: Path, head, expected):
+    seen: list[list[str]] = []
+
+    def respond(call):
+        if call["args"][:2] == head:
+            seen.append(call["args"])
+            raise gw.LarkKitError("boom")
+        raise gw.LarkKitError("boom")
+
+    g, _, _ = make_gateway(monkeypatch, respond)
+    await g.download_media("tok", tmp_path)
+    assert seen, f"{head} 应被调用"
+    args = seen[0]
+    idx = args.index(expected[0])
+    assert args[idx:idx + len(expected)] == expected
 
 
 async def test_auth_login_start缺device_code报错(monkeypatch):
