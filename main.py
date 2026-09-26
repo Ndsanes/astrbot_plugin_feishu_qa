@@ -29,19 +29,6 @@ from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
 from .corpus.model import normalize_title
 from .corpus.parser import parse_xml
-from .jev.client import DEFAULT_ENDPOINT as DEFAULT_JEV_ENDPOINT
-from .jev.client import DEFAULT_MODEL as DEFAULT_JEV_MODEL
-from .jev.client import JevClient
-from .jev.policy import (
-    ACTION_ANSWER_SELF,
-    ACTION_FALLBACK,
-    JevCandidate,
-    JevDecision,
-    build_questions,
-    build_state,
-    decide_links,
-    decide_takeover,
-)
 from .learn.candidate import (
     build_learn_prompt,
     candidate_to_pending_record,
@@ -69,14 +56,6 @@ _MAX_AUTO_LINKS = 3
 # 模糊档(MEDIUM)链接条数:刻意少于直答档,降低错误链接的曝光面。
 _MAX_TENTATIVE_LINKS = 2
 
-# 送进 Jev 的候选正文截断长度。jaggedness #5:state 里无关内容越多准确率越低,
-# 手册条目正文动辄上千字,不截断会把判断稀释掉。
-_JEV_TEXT_CHARS = 600
-
-# 送进 Jev 的候选条数上限。Jev 一次调用并行求值全部候选,条数越多 state 越大;
-# 本地检索本来就只取前 _MAX_TENTATIVE_LINKS+1,这里再兜一层底。
-_JEV_MAX_CANDIDATES = 3
-
 # FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
 _FAQ_CITATION_GUIDANCE = (
     "\n[FAQ 引用规范] 知识库结果分两类:"
@@ -94,7 +73,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.1",
+    "0.9.0",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -128,11 +107,6 @@ class FeishuQaPlugin(Star):
         self._decision_cache = DecisionCache(
             ttl_seconds=float(self._cfg("DECISION_CACHE_TTL_MINUTES", 240)) * 60
         )
-
-        # Jev 决策模型:只在拿到 key 时构造。未配置 / 构造失败一律 None,
-        # 两个接管点见到 None 就走原本的本地判定,行为与未接入时完全一致。
-        self._jev: JevClient | None = self._build_jev()
-
         self._load_corpus()
 
         self._pending_learn: dict[str, dict] = {}  # user_id -> candidate
@@ -209,139 +183,6 @@ class FeishuQaPlugin(Star):
 
     def _tentative_enabled(self) -> bool:
         return bool(self._cfg("TENTATIVE_ANSWER_ENABLED", False))
-
-    # ── Jev 决策模型 ──
-
-    def _build_jev(self) -> JevClient | None:
-        """按配置构造客户端;未启用或缺 key 时返回 None(调用方走本地判定)。"""
-        if not bool(self._cfg("JEV_ENABLED", False)):
-            return None
-        key = str(self._cfg("JEV_API_KEY", "") or "").strip()
-        if not key:
-            logger.warning("[FeishuQA] JEV_ENABLED=true 但未配置 JEV_API_KEY,按未启用处理")
-            return None
-        return JevClient(
-            key,
-            endpoint=str(self._cfg("JEV_ENDPOINT", "") or "").strip() or DEFAULT_JEV_ENDPOINT,
-            model=str(self._cfg("JEV_MODEL", "") or "").strip() or DEFAULT_JEV_MODEL,
-            timeout=float(self._cfg("JEV_TIMEOUT_SECONDS", 5.0)),
-        )
-
-    @staticmethod
-    def _jev_candidates(entries: list, *, limit: int) -> list[JevCandidate]:
-        """语料条目 → Jev 候选。文本截断:长 state 会稀释准确率(jaggedness #5)。"""
-        out: list[JevCandidate] = []
-        for e in entries[:limit]:
-            body = " ".join((e.body or "").split())
-            out.append(
-                JevCandidate(
-                    entry_id=e.id,
-                    title=normalize_title(e.raw_title),
-                    text=body[:_JEV_TEXT_CHARS],
-                )
-            )
-        return out
-
-    def _jev_ask(self, question: str, candidates: list[JevCandidate]):
-        """一次调用并行求值全部问题。任何失败返回 ok=False 的结果。"""
-        if self._jev is None or not candidates:
-            return None
-        try:
-            return self._jev.evaluate(
-                build_state(question, candidates), build_questions(candidates)
-            )
-        except Exception as exc:  # 兜底:Jev 不得把整条应答链路带崩
-            logger.warning("[FeishuQA] Jev 调用异常,回落本地判定: %s", type(exc).__name__)
-            return None
-
-    def _log_jev(self, decision: JevDecision, *, stage: str, question: str, action: str) -> None:
-        """Jev 判定落决策日志。概率值一并记录,便于事后回看阈值是否合理。"""
-        self._log_decision(
-            stage=stage,
-            action=action,
-            query=question,
-            results=[],
-            extra={
-                "jev_action": decision.action,
-                "jev_reason": decision.reason,
-                "jev_nouls": {k: round(v, 4) for k, v in decision.nouls.items()},
-                "jev_picked": list(decision.entry_ids),
-            },
-        )
-
-    async def _jev_takeover(self, event, question: str, plan) -> bool:
-        """C 位点:由 Jev 判定这条 MEDIUM 查询是自己答还是交回主 Agent。
-
-        返回 True 表示"已处理完"(无论答了还是明确交回),调用方不要再走
-        本地模糊档分支。返回 False 表示 Jev 未启用或结果不可用,交回调用方
-        按原本的本地逻辑处理。
-
-        这里**只发模糊措辞**的章节指引,不贴正文、不附图。理由:Jev 的作用是
-        筛掉不够格的候选从而省掉一次 Agent 往返,不是让我们改用更激进的答法。
-        """
-        if self._jev is None:
-            return False
-        entries = [r.entry for r in plan.candidates[:_JEV_MAX_CANDIDATES]]
-        cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
-        result = self._jev_ask(question, cands)
-        if result is None:
-            return False
-
-        decision = decide_takeover(
-            cands,
-            result,
-            sufficiency_threshold=float(self._cfg("JEV_TAKEOVER_SUFFICIENCY", 0.45)),
-            synthesis_threshold=float(self._cfg("JEV_SYNTHESIS_THRESHOLD", 0.70)),
-        )
-        if decision.action == ACTION_FALLBACK:
-            return False
-
-        if decision.action == ACTION_ANSWER_SELF and decision.entry_ids:
-            picked = [e for e in entries if e.id in set(decision.entry_ids)]
-            self._log_jev(
-                decision, stage="route", question=question, action="jev_tentative_sent"
-            )
-            self._decision_cache.put(
-                question,
-                action="tentative",
-                entry_ids=[e.id for e in picked],
-                revision=self._revision,
-            )
-            await self._send_direct(event, self._build_tentative_list(event, picked))
-            event.stop_event()
-        else:
-            self._log_jev(
-                decision, stage="route", question=question, action="jev_hand_off"
-            )
-        return True
-
-    def _jev_filter_links(
-        self, question: str, entries: list
-    ) -> JevDecision | None:
-        """D 位点:由 Jev 判定这批候选章节哪些值得附给用户。
-
-        返回 None 表示 Jev 未启用/不可用,调用方改用本地 ``linkable_entries``。
-        判定基准恒为**用户原问题**——2026-09-15 事故的根因就是拿模型那次
-        检索词当基准,而检索相关度是为检索词服务的,与用户问什么无关。
-
-        阈值刻意高于 C 位点:附链是对用户的承诺,发错章节的代价是信任,
-        而漏发一条指引的代价只是少个参考(主 Agent 的正文回答还在)。
-        """
-        if self._jev is None or not question or not entries:
-            return None
-        cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
-        result = self._jev_ask(question, cands)
-        if result is None:
-            return None
-        decision = decide_links(
-            cands,
-            result,
-            sufficiency_threshold=float(self._cfg("JEV_LINK_SUFFICIENCY", 0.70)),
-            max_links=_MAX_AUTO_LINKS,
-        )
-        if decision.action == ACTION_FALLBACK:
-            return None
-        return decision
 
     # ── 语料装载 ──
 
@@ -598,9 +439,9 @@ class FeishuQaPlugin(Star):
 
         if plan.kind == "tentative":
             # MEDIUM 区:证据不足以断言"这就是答案",但可能有用。
-            if await self._jev_takeover(event, text, plan):
-                return
-            # Jev 未启用/不可用 → 沿用纯本地的模糊档开关,行为与 v0.9.0 一致。
+            # 默认仍交主 Agent(2026-09-26 实测 14 条真问里 MEDIUM 占 8 条,
+            # 其中约一半 top-1 是错的,贸然接管会把今天能答对的问题降级);
+            # 开启后只投模糊措辞的章节指引,不贴正文、不附图、不作断言。
             if self._tentative_enabled():
                 picked = [r.entry for r in plan.candidates[:_MAX_TENTATIVE_LINKS]]
                 self._log_decision(
@@ -772,25 +613,7 @@ class FeishuQaPlugin(Star):
             return
         retriever = self._retriever
         n_before = len(candidates)
-        jev_decision = self._jev_filter_links(question, candidates)
-        if jev_decision is not None:
-            kept = set(jev_decision.entry_ids)
-            candidates = [e for e in candidates if e.id in kept]
-            if not candidates:
-                self._log_jev(
-                    jev_decision,
-                    stage="linkable",
-                    question=question,
-                    action="jev_links_suppressed",
-                )
-                return
-            self._log_jev(
-                jev_decision,
-                stage="linkable",
-                question=question,
-                action="jev_links_sent",
-            )
-        elif retriever is not None and question:
+        if retriever is not None and question:
             candidates = retriever.linkable_entries(
                 question, candidates, max_n=_MAX_AUTO_LINKS
             )
