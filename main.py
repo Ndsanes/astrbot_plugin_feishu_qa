@@ -97,7 +97,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.6",
+    "0.9.7",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -402,14 +402,13 @@ class FeishuQaPlugin(Star):
         记录里同时写本地结论与 Jev 结论,便于一眼看出 Jev 有没有改变动作。
         全程不发消息、不阻断、只写自己的决策日志。
         """
-        router = self._router
-        if router is None or not question:
+        if self._retriever is None or not question:
             return
         try:
-            plan = router.route(
-                question, group_id="__selftest__", umo="", top_k=_JEV_MAX_CANDIDATES
-            )
-            entries = [r.entry for r in plan.candidates]
+            # 同样**不走 router**:router 带群白名单门禁,而自检用的 group_id
+            # 不在白名单里,会被判 denied 拿不到候选(与 /jev_probe 同一个坑)。
+            results = self._retriever.search(question, top_k=_JEV_MAX_CANDIDATES)
+            entries = [r.entry for r in results]
             cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
             result = self._jev_ask(question, cands)
         except Exception as exc:
@@ -433,23 +432,22 @@ class FeishuQaPlugin(Star):
             stage="route",
             action="jev_selftest",
             query=question,
-            results=plan.candidates,
+            results=results,
             extra={
                 "jev_action": decision.action,
                 "jev_reason": decision.reason,
                 "jev_nouls": {k: round(v, 4) for k, v in decision.nouls.items()},
                 "jev_probs": decision.probabilities,
                 "jev_picked": list(decision.entry_ids),
-                "local_kind": plan.kind,
                 "local_top1": local_pick,
-                "local_score": round(plan.score, 3),
+                "local_score": round(results[0].score, 3),
                 "changed_vs_local": changed,
             },
         )
         logger.info(
-            "[FeishuQA] Jev 决策链自检: local=%s(score=%.2f) jev=%s(%s)%s picked=%s",
-            plan.kind,
-            plan.score,
+            "[FeishuQA] Jev 决策链自检: local_top1=%s(score=%.2f) jev=%s(%s)%s picked=%s",
+            local_pick,
+            results[0].score,
             decision.action,
             decision.reason,
             " [与本地不同]" if changed else "",

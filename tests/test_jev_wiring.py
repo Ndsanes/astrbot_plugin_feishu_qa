@@ -484,6 +484,16 @@ class TestSelfTestChain:
         p._jev_selftest_chain(p._jev_probe_query())  # 不得抛
         assert not [r for r in _decisions(p) if r["action"] == "jev_selftest"]
 
+    def test_selftest_bypasses_group_whitelist(self, make_plugin, monkeypatch) -> None:
+        """回归:自检曾走 router,而 router 带群白名单门禁,group_id 不在白名单
+        时被判 denied 拿不到候选,金丝雀被静默跳过。现自检直接用检索器。"""
+        _patch_jev(monkeypatch, _answer([0.05, 0.05, 0.90]))
+        p = make_plugin(JEV_ENABLED=True, JEV_API_KEY="k", ENABLED_GROUPS=["grp_x"])
+        p._jev_selftest_chain(p._jev_probe_query())
+        rows = [r for r in _decisions(p) if r["action"] == "jev_selftest"]
+        assert rows, "白名单受限时自检也必须出记录,否则金丝雀静默失效"
+        assert rows[-1]["extra"]["changed_vs_local"] is True
+
     def test_selftest_noop_when_disabled(self, make_plugin, monkeypatch) -> None:
         _patch_jev(monkeypatch, _answer([0.9, 0.05, 0.05]))
         p = make_plugin(JEV_ENABLED=False, JEV_API_KEY="")
