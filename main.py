@@ -35,6 +35,8 @@ from .jev.client import JevClient
 from .jev.policy import (
     ACTION_ANSWER_SELF,
     ACTION_FALLBACK,
+    ANY_QID,
+    RANK_QID,
     JevCandidate,
     JevDecision,
     build_questions,
@@ -94,7 +96,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.2",
+    "0.9.3",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -247,12 +249,26 @@ class FeishuQaPlugin(Star):
         if self._jev is None or not candidates:
             return None
         try:
-            return self._jev.evaluate(
+            result = self._jev.evaluate(
                 build_state(question, candidates), build_questions(candidates)
             )
         except Exception as exc:  # 兜底:Jev 不得把整条应答链路带崩
             logger.warning("[FeishuQA] Jev 调用异常,回落本地判定: %s", type(exc).__name__)
             return None
+        # 成功也记一行:决策日志在 data/plugin_data 里,不方便从面板回读,
+        # 而"到底有没有真的调出去"是最需要一眼可见的事。
+        if result.ok:
+            ans = result.choice(RANK_QID)
+            top = max(ans.probabilities.values()) if ans and ans.probabilities else 0.0
+            logger.info(
+                "[FeishuQA] Jev 判定 cands=%d answerable=%.2f top_p=%.2f model=%s tok=%d",
+                len(candidates),
+                result.noul(ANY_QID) or 0.0,
+                top,
+                result.model,
+                result.input_tokens,
+            )
+        return result
 
     def _log_jev(self, decision: JevDecision, *, stage: str, question: str, action: str) -> None:
         """Jev 判定落决策日志。概率值一并记录,便于事后回看阈值是否合理。"""
