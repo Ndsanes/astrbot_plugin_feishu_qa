@@ -150,6 +150,21 @@ class TestRotation:
         assert rows[-1]["q"] == "问题199"
 
 
+class TestWriteObservable:
+    def test_record_reports_success(self, tmp_path) -> None:
+        log = DecisionLog(tmp_path)
+        assert log.record(_rec()) is True
+        assert log.path.is_file()
+
+    def test_record_reports_failure_instead_of_raising(self, tmp_path) -> None:
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dir")
+        assert DecisionLog(blocker / "nested").record(_rec()) is False
+
+    def test_disabled_reports_false(self, tmp_path) -> None:
+        assert DecisionLog(tmp_path, enabled=False).record(_rec()) is False
+
+
 class TestNeverRaises:
     def test_unwritable_path_is_swallowed(self, tmp_path) -> None:
         # 把 data_root 指向一个不可写的路径,写盘必须静默失败而不是炸掉业务

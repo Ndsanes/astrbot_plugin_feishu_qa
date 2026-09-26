@@ -142,10 +142,15 @@ class DecisionLog:
         self.max_bytes = max(1024, int(max_bytes))
         self.keep_files = max(1, int(keep_files))
 
-    def record(self, rec: DecisionRecord, *, ts: float | None = None) -> None:
-        """追加一条决策。失败只 debug 日志,绝不抛出。"""
+    def record(self, rec: DecisionRecord, *, ts: float | None = None) -> bool:
+        """追加一条决策。失败只 debug 日志,绝不抛出。
+
+        返回是否真的写进了磁盘——决策日志是"事后唯一的真相来源",写盘失败
+        此前完全静默,一旦目录权限或磁盘出问题,线上表现只是"日志里啥都没有",
+        无法与"根本没记录"区分。
+        """
         if not self.enabled:
-            return
+            return False
         try:
             payload = rec.to_dict(
                 text_mode=self.text_mode,
@@ -156,8 +161,10 @@ class DecisionLog:
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
             self._rotate_if_needed()
+            return True
         except Exception as exc:  # 观测不得影响业务
-            logger.debug("[decision_log] 写入失败(已忽略): %s", exc)
+            logger.warning("[decision_log] 写入失败(已忽略): %s", exc)
+            return False
 
     def _rotated_path(self, index: int) -> Path:
         """第 index 份轮转文件;index=0 即当前主文件。"""

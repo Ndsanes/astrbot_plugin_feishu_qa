@@ -100,7 +100,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.8",
+    "0.9.9",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -198,9 +198,9 @@ class FeishuQaPlugin(Star):
         results=None,
         cached: bool = False,
         extra: dict | None = None,
-    ) -> None:
-        """落一条决策。任何异常已被 DecisionLog 内部吞掉。"""
-        self._decision_log.record(
+    ) -> bool:
+        """落一条决策。任何异常已被 DecisionLog 内部吞掉。返回是否落盘成功。"""
+        return self._decision_log.record(
             DecisionRecord(
                 stage=stage,
                 action=action,
@@ -469,7 +469,7 @@ class FeishuQaPlugin(Star):
         changed = decision.action == ACTION_ANSWER_SELF and bool(
             decision.entry_ids
         ) and local_pick not in decision.entry_ids
-        self._log_decision(
+        written = self._log_decision(
             stage="route",
             action="jev_selftest",
             query=question,
@@ -486,13 +486,15 @@ class FeishuQaPlugin(Star):
             },
         )
         logger.info(
-            "[FeishuQA] Jev 决策链自检: local_top1=%s(score=%.2f) jev=%s(%s)%s picked=%s",
+            "[FeishuQA] Jev 决策链自检: local_top1=%s(score=%.2f) jev=%s(%s)%s "
+            "picked=%s 落盘=%s",
             local_pick,
             results[0].score,
             decision.action,
             decision.reason,
             " [与本地不同]" if changed else "",
             ",".join(decision.entry_ids) or "-",
+            "ok" if written else "FAIL",
         )
         return (decision.entry_ids[0] if decision.entry_ids else ""), local_pick
 
