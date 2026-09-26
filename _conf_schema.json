@@ -75,53 +75,6 @@
     "hint": "期间重复问同一问题直接复用首次结果,杜绝同一句问两次答案不同;语料重新同步后自动作废",
     "default": 240
   },
-  "JEV_ENABLED": {
-    "description": "启用 Jev 决策模型接管路由判定",
-    "type": "bool",
-    "hint": "关闭或未配 JEV_API_KEY 时,两个接管点完全走本地判定,行为与 v0.9.0 一致",
-    "default": false
-  },
-  "JEV_API_KEY": {
-    "description": "TypeSafe Jev API Key",
-    "type": "string",
-    "hint": "console.typesafe.ai 自助申请;仅存于实例配置,不会写入决策日志",
-    "obvious_hint": true,
-    "default": ""
-  },
-  "JEV_MODEL": {
-    "description": "Jev 模型版本",
-    "type": "string",
-    "hint": "留空用 jev-latest;调阈值前建议钉死具体版本,别名会随发布漂移",
-    "default": ""
-  },
-  "JEV_ENDPOINT": {
-    "description": "Jev 接口地址",
-    "type": "string",
-    "default": ""
-  },
-  "JEV_TIMEOUT_SECONDS": {
-    "description": "Jev 调用超时(秒)",
-    "type": "float",
-    "hint": "超时/报错一律静默回落到本地判定,不会挂住应答链路",
-    "default": 5.0
-  },
-  "JEV_TAKEOVER_SUFFICIENCY": {
-    "description": "C 位点:候选够格接管自己的答的阈值",
-    "type": "float",
-    "hint": "刻意偏低——此位点误判「答得上」的代价(回一句模糊指引)远小于误判「答不上」(该答的问题静默)",
-    "default": 0.45
-  },
-  "JEV_SYNTHESIS_THRESHOLD": {
-    "description": "C 位点:判定「需要综合多条资料」的阈值",
-    "type": "float",
-    "default": 0.70
-  },
-  "JEV_LINK_SUFFICIENCY": {
-    "description": "D 位点:章节值得附链接的阈值",
-    "type": "float",
-    "hint": "刻意高于 C——附链是对用户的承诺,发错章节的代价是信任(2026-09-15 事故形态),漏发只是少个参考",
-    "default": 0.70
-  },
   "LEARN_CONTEXT_MESSAGES": {
     "description": "/learn 分析的最近消息条数上限",
     "type": "int",
