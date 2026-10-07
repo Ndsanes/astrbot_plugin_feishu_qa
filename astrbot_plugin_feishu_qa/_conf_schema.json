@@ -147,14 +147,10 @@
     "default": true
   },
   "FUUUMUSIC_SECTIONS": {
-    "description": "要导入的 fuuumusic 章节(键值对:章节名 → 是否只导入该章节)",
-    "type": "dict",
-    "hint": "全部为 false(或留空)= 导入整页全部 100 条;勾选任意一项 = 只导入被勾选的章节。章节名由插件同步时自动刷新到本项。",
-    "default": {
-      "一、Cakewalk Sonar相关问答汇总": false,
-      "二、其他音源相关问答汇总": false,
-      "三、Cakewalk 官方文档（中文翻译）": false
-    }
+    "description": "要导入的 fuuumusic 章节(留空 = 全部导入)",
+    "type": "list",
+    "hint": "留空 = 导入整页全部 100 条;填入章节名 = 只导入这些章节,例如 三、Cakewalk 官方文档（中文翻译）。章节名见站点问答页的一级标题。",
+    "default": []
   },
   "FUUUMUSIC_SYNC_INTERVAL_HOURS": {
     "description": "fuuumusic 自动同步间隔(小时)",

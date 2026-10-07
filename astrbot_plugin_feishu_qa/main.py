@@ -609,42 +609,6 @@ class FeishuQaPlugin(Star):
             # 同步执行:管理员在日志里立刻能看到 key/网络是否通,而不是等首问
             self._jev_selfcheck()
 
-    def _refresh_fuuumusic_sections(self, html: str) -> None:
-        """把页面当前的章节名同步进配置 schema 的 ``FUUUMUSIC_SECTIONS`` 默认值。
-
-        纯粹是为了让 WebUI 配置页能列出**当前**可选的章节。写的是插件目录下的
-        ``_conf_schema.json``(临时文件 + 原子替换),失败只告警——配置页少几个
-        选项不影响问答。
-
-        刻意**不放在 initialize 里**:旧实现在插件启动时同步抓网回写,线上实测
-        最坏阻塞加载约 10 秒,期间整台机器人不处理消息。现在只在同步任务的
-        上下文里做,且复用已经抓下来的页面。
-        """
-        try:
-            sections = discover_sections(html)
-            if not sections:
-                return
-            schema_path = Path(__file__).parent / "_conf_schema.json"
-            schema = json.loads(schema_path.read_text())
-            node = schema.get("FUUUMUSIC_SECTIONS")
-            if not isinstance(node, dict):
-                return
-            current = node.get("default")
-            current = current if isinstance(current, dict) else {}
-            # 保留用户已勾选的值,只补章节;新章节默认 false(= 不过滤)。
-            merged = {s: bool(current.get(s, False)) for s in sections}
-            for key, value in current.items():
-                merged.setdefault(key, bool(value))
-            if merged == current:
-                return
-            node["default"] = merged
-            tmp = schema_path.with_name("_conf_schema.json.tmp")
-            tmp.write_text(json.dumps(schema, ensure_ascii=False, indent=2))
-            tmp.replace(schema_path)
-            logger.info("[FeishuQA] 配置页章节选项已刷新: %s", " / ".join(sections))
-        except Exception as exc:
-            logger.warning("[FeishuQA] 章节选项刷新失败(不影响问答): %s", exc)
-
     def _migrate_snapshot_to_slices(self) -> None:
         """把单来源时代的 ``corpus.json`` 就地拆成一个分片(一次性,幂等)。
 
@@ -803,8 +767,8 @@ class FeishuQaPlugin(Star):
             if not html:
                 return {"status": "error", "reason": "qa page fetch failed"}
 
-            sections_cfg = self._cfg("FUUUMUSIC_SECTIONS", {}) or {}
-            wanted = [k for k, v in dict(sections_cfg).items() if v]
+            sections_cfg = self._cfg("FUUUMUSIC_SECTIONS", []) or []
+            wanted = [str(s) for s in sections_cfg if str(s).strip()]
             available = discover_sections(html)
             sections = resolve_sections(wanted, available)
             if wanted and not sections:
@@ -839,7 +803,6 @@ class FeishuQaPlugin(Star):
             )
             self.store.save_slice(SOURCE_FUUUMUSIC, manifest)
             merged = self._commit_merged()
-            self._refresh_fuuumusic_sections(html)
 
             return {
                 "status": "synced",
