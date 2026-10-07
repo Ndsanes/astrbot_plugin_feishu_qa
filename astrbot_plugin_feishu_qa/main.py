@@ -39,6 +39,7 @@ from .fuuumusic import (
     download_manifest_images,
     fetch_url,
     parse_qa_document,
+    resolve_sections,
 )
 from .fuuumusic import SOURCE_NAME as SOURCE_FUUUMUSIC
 from .jev.client import DEFAULT_ENDPOINT as DEFAULT_JEV_ENDPOINT
@@ -797,14 +798,25 @@ class FeishuQaPlugin(Star):
                 return {"status": "error", "reason": "qa page fetch failed"}
 
             sections_cfg = self._cfg("FUUUMUSIC_SECTIONS", {}) or {}
-            sections = [k for k, v in dict(sections_cfg).items() if v]
+            wanted = [k for k, v in dict(sections_cfg).items() if v]
+            available = discover_sections(html)
+            sections = resolve_sections(wanted, available)
+            if wanted and not sections:
+                # 配置过的章节名在页面上一个都不存在(旧版目录名残留 / 站点改版):
+                # 不能据此导出 0 条,那等于把整个网页语料清零。
+                logger.warning(
+                    "[FeishuQA] FUUUMUSIC_SECTIONS 配置的章节均不存在于页面,"
+                    "本次按不过滤处理。配置=%s 页面实际=%s",
+                    wanted,
+                    available,
+                )
             revision_id = int(datetime.now(UTC).timestamp())
             entries = parse_qa_document(
                 html, revision_id=revision_id, sections=sections or None
             )
             if not entries:
-                # 章节白名单写错(或站点改版)时宁可保留旧分片,也不要用空语料
-                # 覆盖掉用户已经能用的知识库。
+                # 站点改版等异常时宁可保留旧分片,也不要用空语料覆盖掉用户
+                # 已经能用的知识库。
                 return {
                     "status": "error",
                     "reason": f"no entries parsed (sections={sections})",

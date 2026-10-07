@@ -13,6 +13,7 @@ from astrbot_plugin_feishu_qa.fuuumusic import (
     SOURCE_NAME,
     discover_sections,
     parse_qa_document,
+    resolve_sections,
 )
 
 PAGE_HTML = """<!DOCTYPE html>
@@ -230,3 +231,36 @@ class TestFetchDoesNotBlockEventLoop:
 
         assert gaps, "心跳任务没有跑起来"
         assert max(gaps) < 0.2, f"事件循环被阻塞了 {max(gaps):.2f}s"
+
+
+class TestResolveSections:
+    """章节白名单是**章节名**(会过期),过期的白名单必须退化为不过滤。"""
+
+    AVAILABLE = [
+        "一、Cakewalk Sonar相关问答汇总",
+        "二、其他音源相关问答汇总",
+        "三、Cakewalk 官方文档（中文翻译）",
+    ]
+
+    def test_legacy_config_degenerates_to_no_filter(self) -> None:
+        # 线上实测:保存的还是旧版目录名,若据此过滤会把整个网页语料清零
+        assert resolve_sections(["cakewalk-sonar-faq", "cakewalk-sonar-help"], self.AVAILABLE) == []
+
+    def test_matching_keys_are_kept(self) -> None:
+        assert resolve_sections(["二、其他音源相关问答汇总"], self.AVAILABLE) == [
+            "二、其他音源相关问答汇总"
+        ]
+
+    def test_partial_match_keeps_what_matches(self) -> None:
+        got = resolve_sections(["三、Cakewalk 官方文档（中文翻译）", "过期章节"], self.AVAILABLE)
+        assert got == ["三、Cakewalk 官方文档（中文翻译）"]
+
+    def test_empty_or_none_means_no_filter(self) -> None:
+        assert resolve_sections([], self.AVAILABLE) == []
+        assert resolve_sections(None, self.AVAILABLE) == []
+        assert resolve_sections(["", "  "], self.AVAILABLE) == []
+
+    def test_whitespace_tolerated(self) -> None:
+        assert resolve_sections(["  二、其他音源相关问答汇总  "], self.AVAILABLE) == [
+            "二、其他音源相关问答汇总"
+        ]

@@ -333,6 +333,21 @@ def discover_sections(html: str) -> list[str]:
     return seen
 
 
+def resolve_sections(configured, available: list[str]) -> list[str]:
+    """把配置的章节白名单解析为页面上**真实存在**的章节名。
+
+    配置项的键是章节名而不是稳定 ID,站点改版或旧版配置残留都会让它过期。
+    实测(2026-10-07):线上保存的还是旧版目录名(``cakewalk-sonar-faq``),
+    与新页面的章节名对不上,白名单命中 0 条——若据此导入,整个网页语料会被
+    静默清零。故**过期的白名单一律退化为"不过滤"**:宁可多导入,不可默默
+    少导入。返回空列表即"不过滤"。
+    """
+    wanted = {str(s).strip() for s in (configured or []) if str(s).strip()}
+    if not wanted:
+        return []
+    return [s for s in available if s in wanted]
+
+
 # ── 图片下载 ──
 
 

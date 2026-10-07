@@ -32,6 +32,7 @@ Key flow points an editor must preserve:
 3. **Images are downloaded by `file_token` to disk** before sending (Feishu temp URLs don't work on QQ). A single image download failure is logged, never fatal.
 4. **Confidence routing** lives in `answer/router.py`: whitelist gate first (`denied` = zero response), then top-1 score vs `HIGH_CONFIDENCE_THRESHOLD` (direct) / `MEDIUM_CONFIDENCE_THRESHOLD` (agent tool) / below (miss text). All zero-LLM except the agent path.
 5. **Retrieval content injected into the agent goes through `extra_user_content_parts`**, never into the system prompt (keeps prompt cache intact).
+6. **多来源语料分片**:`corpus.json` 是**派生视图**,由 `corpus_sources/<source>.json` 全部分片经 `merge_manifests` 重算。任何一个来源的同步**只能写自己的分片**,不得直接 `commit` 到 `corpus.json` — 否则两个来源会每轮同步互相覆盖(2026-10-07 线上事故:飞书 47 条与网页 76 条轮流消失)。合并按 entry ID 去重、飞书优先(网页 FAQ 段是飞书文档的镜像,同章节+同标题 → 同 ID)。条目 `source` 字段决定直达链接与署名的生成方式(飞书拼块锚点、网页用其自身 URL)。
 
 ## Key Directories
 
@@ -42,7 +43,8 @@ Key flow points an editor must preserve:
 - `astrbot_plugin_feishu_qa/answer/` — `router.py` (whitelist + confidence routing, pure logic), `direct.py` (direct-answer formatting)
 - `astrbot_plugin_feishu_qa/storage/snapshot.py` — atomic snapshot persistence (`SnapshotStore`)
 - `astrbot_plugin_feishu_qa/learn/` — `candidate.py` `/learn` candidate extraction + pending-QA store; `writeback.py` 写回纯逻辑（块构造、查重守卫、记录键）。真实写回只允许指向 `LEARNING_WRITEBACK_DOC_URL` 配置的**副本文档**，生产文档写回是人工步骤
-- `astrbot_plugin_feishu_qa/tools/build_qa_corpus.py` — offline/online corpus build CLI
+- `astrbot_plugin_feishu_qa/fuuumusic.py` — 小闻的奇妙屋(https://www.fuuumusic.com) 语料接入:抓取问答聚合页 `/cakewalk-sonar-faq/all`(100 条 = 47 FAQ + 53 篇官方文档翻译),按站点自身的 `<details class="qa-item" id="qN" data-qtitle="【症状标签】问题？">` 结构拆成逐条 `QaEntry`(复用飞书条目字段形态,故检索/闸门/Jev/链接渲染无需改动);`resolve_sections` 处理章节白名单(过期即退化为不过滤);所有 HTTP 经 `asyncio.to_thread`(**绝不可在协程里直接跑同步 urllib**,会卡死整个机器人)
+- `astrbot_plugin_feishu_qa/tools/build_qa_corpus.py` — 离线/在线 corpus build CLI
 - `astrbot_lark_kit/` — `cli.py` / `envelope.py` / `errors.py`（含 `UmoParseError`）/ `rate_limit.py` / `auth.py` / `bootstrap.py` / `events.py` / `messaging.py` / `state.py` / `platforms.py`（UMO → 平台实例身份，纯解析层）；`pyproject.toml` 零运行时依赖可安装
 - `tests/` under each package; `astrbot_plugin_feishu_qa/tests/fixtures/` holds real-corpus snapshots (`qa_r8268.xml`, `qa_r8394.xml`, `meta.json`, `retrieval_queries.json`)
 
