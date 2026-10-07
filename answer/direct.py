@@ -9,6 +9,10 @@ from ..corpus.model import QaEntry, normalize_title
 from ..storage.snapshot import SnapshotStore
 
 SOURCE_ATTRIBUTION = "来源:肖闻 Xiaowenn 的 Q&A 文档"
+# 多来源后署名必须说实话:网页那条链出去的是小闻的网站,不是飞书文档。
+# 混投(一轮里同时发出两个来源的条目)则用中性说法,避免署名只覆盖一半。
+SOURCE_ATTRIBUTION_FUUUMUSIC = "来源:小闻的奇妙屋 fuuumusic.com"
+SOURCE_ATTRIBUTION_MIXED = "来源:肖闻 Xiaowenn 的 Cakewalk Sonar 中文资料"
 
 # 用户可见链接消息的**唯一**头部/尾部。
 #

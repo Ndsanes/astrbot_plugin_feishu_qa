@@ -139,5 +139,23 @@
     "type": "string",
     "hint": "强烈建议填一份生产 Q&A 文档的副本,验证无误后再人工切换",
     "default": ""
+  },
+  "FUUUMUSIC_ENABLED": {
+    "description": "启用 fuuumusic.com 中文资料作为额外语料源",
+    "type": "bool",
+    "hint": "关闭后不再抓取 fuuumusic,已有数据保留但不再更新",
+    "default": true
+  },
+  "FUUUMUSIC_SECTIONS": {
+    "description": "要导入的 fuuumusic 章节(留空 = 全部导入)",
+    "type": "list",
+    "hint": "留空 = 导入整页全部 100 条;填入章节名 = 只导入这些章节,例如 三、Cakewalk 官方文档（中文翻译）。章节名见站点问答页的一级标题。",
+    "default": []
+  },
+  "FUUUMUSIC_SYNC_INTERVAL_HOURS": {
+    "description": "fuuumusic 自动同步间隔(小时)",
+    "type": "int",
+    "hint": "0 = 关闭自动同步;fuuumusic 更新频率较低,建议 24 小时",
+    "default": 24
   }
 }

@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -20,11 +21,27 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
 from .adapter.gateway import DOC_FORMAT_XML, GatewayClient
-from .answer.direct import DirectAnswer, format_link_list
+from .answer.direct import (
+    SOURCE_ATTRIBUTION,
+    SOURCE_ATTRIBUTION_FUUUMUSIC,
+    SOURCE_ATTRIBUTION_MIXED,
+    DirectAnswer,
+    format_link_list,
+)
 from .answer.router import AnswerRouter
-from .corpus.builder import build_manifest, diff_manifests
+from .corpus.builder import build_manifest, diff_manifests, merge_manifests
 from .corpus.model import extract_symptom_tags, normalize_title
-from .corpus.parser import parse_xml
+from .corpus.parser import ParseResult, parse_xml
+from .fuuumusic import (
+    QA_PAGE_URL,
+    SOURCE_FEISHU,
+    discover_sections,
+    download_manifest_images,
+    fetch_url,
+    parse_qa_document,
+    resolve_sections,
+)
+from .fuuumusic import SOURCE_NAME as SOURCE_FUUUMUSIC
 from .jev.client import DEFAULT_ENDPOINT as DEFAULT_JEV_ENDPOINT
 from .jev.client import DEFAULT_MODEL as DEFAULT_JEV_MODEL
 from .jev.client import JevClient, noul_question
@@ -96,7 +113,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.11",
+    "0.9.12",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -579,18 +596,53 @@ class FeishuQaPlugin(Star):
     # ── 生命周期 ──
 
     async def initialize(self) -> None:
+        self._migrate_snapshot_to_slices()
         if not self.adapter.available:
             logger.warning(
                 "[FeishuQA] lark_cli 平台未加载,飞书拉取/授权不可用,本地语料继续服务"
             )
         if int(self._cfg("SYNC_INTERVAL_HOURS", 12)) > 0:
             self._sync_task = asyncio.create_task(self._sync_loop())
+        if bool(self._cfg("FUUUMUSIC_ENABLED", True)):
+            self._fuuumusic_task = asyncio.create_task(self._fuuumusic_sync_loop())
         if bool(self._cfg("JEV_SELFTEST_ON_LOAD", True)):
             # 同步执行:管理员在日志里立刻能看到 key/网络是否通,而不是等首问
             self._jev_selfcheck()
 
+    def _migrate_snapshot_to_slices(self) -> None:
+        """把单来源时代的 ``corpus.json`` 就地拆成一个分片(一次性,幂等)。
+
+        分片化之前只存在一份 crontab 式的整篇快照;若不做这步,首个跑起来的
+        来源会算出"只有自己"的合并结果,把另一个来源的条目静默抹掉——尤其在
+        ``SYNC_INTERVAL_HOURS=0``(关闭飞书自动同步)时飞书语料会凭空消失。
+        纯本地文件操作,失败只告警。
+        """
+        try:
+            if self.store.load_slice(SOURCE_FEISHU) or self.store.load_slice(SOURCE_FUUUMUSIC):
+                return
+            old = self.store.load()
+            if not old or not old.get("entries"):
+                return
+            # 旧版网页同步会把 manifest["source"] 写成 "fuuumusic.com"
+            name = (
+                SOURCE_FUUUMUSIC
+                if str(old.get("source") or "") in ("fuuumusic.com", SOURCE_FUUUMUSIC)
+                else SOURCE_FEISHU
+            )
+            for entry in old["entries"]:
+                entry.setdefault("source", name)
+            old["source"] = name
+            self.store.save_slice(name, old)
+            logger.info(
+                "[FeishuQA] 旧快照已迁移为分片 source=%s entries=%d",
+                name,
+                len(old["entries"]),
+            )
+        except Exception as exc:
+            logger.warning("[FeishuQA] 快照迁移失败(不影响问答): %s", exc)
+
     async def terminate(self) -> None:
-        for task in (self._sync_task,):
+        for task in (self._sync_task, getattr(self, "_fuuumusic_task", None)):
             if task:
                 task.cancel()
 
@@ -609,6 +661,18 @@ class FeishuQaPlugin(Star):
                 logger.warning("[FeishuQA] 同步失败(旧语料继续服务): %s", exc)
             await asyncio.sleep(interval)
 
+    async def _fuuumusic_sync_loop(self) -> None:
+        interval = int(self._cfg("FUUUMUSIC_SYNC_INTERVAL_HOURS", 24)) * 3600
+        await asyncio.sleep(60)  # 启动后稍等,避免与飞书同步争抢带宽
+        while True:
+            try:
+                result = await self._sync_fuuumusic()
+                logger.info("[FeishuQA] fuuumusic 定时同步: %s", result)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("[FeishuQA] fuuumusic 同步失败: %s", exc)
+            await asyncio.sleep(interval)
 
     async def sync_once(self) -> dict:
         """抓取→解析→下载缺失图→原子提交→热替换检索器。"""
@@ -617,10 +681,16 @@ class FeishuQaPlugin(Star):
         )
         parsed = parse_xml(doc.content, source_revision=doc.revision_id)
         manifest = build_manifest(
-            parsed, revision_id=doc.revision_id, document_id=doc.document_id
+            parsed,
+            revision_id=doc.revision_id,
+            document_id=doc.document_id,
+            source=SOURCE_FEISHU,
         )
         old = self.store.load()
-        diff = diff_manifests(old, manifest)
+        # 差异一律按**合并视图**比较(旧合并 vs 新合并,见下方 commit 之后):
+        # 飞书同步只替换自己那片分片,若拿"自己的分片"与"整份合并快照"相减,
+        # 会把另一个来源的全部条目报成 removed(线上实测 removed=76,极易误读
+        # 成"语料被删了")。
 
         # 章节定位(块 ID)会随文档结构编辑整体重生:即使正文一字未改,
         # 也可能全部换新。快照必须无条件刷新,否则章节直达链接静默失效
@@ -650,9 +720,10 @@ class FeishuQaPlugin(Star):
                 else:
                     redownloaded += 1
 
-        store = SnapshotStore(self.data_root)
-        store.commit(manifest)
-        self._load_corpus()
+        # 飞书只写自己的分片;合并快照由全部分片重算(网页那份不会被抹掉)。
+        self.store.save_slice(SOURCE_FEISHU, manifest)
+        merged = self._commit_merged()
+        diff = diff_manifests(old, merged)
         if relinked:
             samples = ";".join(
                 f"{e['id']}:{old_locs.get(e['id'], '?')}→{e['source_locator']}"
@@ -674,9 +745,92 @@ class FeishuQaPlugin(Star):
             "added": diff["added"],
             "updated": diff["updated"],
             "removed": diff["removed"],
+            "corpus_entries": merged["entry_count"],
+            "sources": {k: v["kept"] for k, v in merged.get("sources", {}).items()},
             "image_failures": failures,
             "relinked": len(relinked),
         }
+
+    async def _sync_fuuumusic(self) -> dict:
+        """抓取小闻的问答聚合页 → 逐条结构化 → 写入自己的分片 → 重算合并快照。
+
+        只写 ``corpus_sources/fuuumusic.json``,绝不直接改写 ``corpus.json``:
+        合并视图由全部分片重算(见 ``_commit_merged``)。2026-10-07 事故正是
+        两个来源各自整篇覆盖快照,导致 47 条飞书语料与 76 条网页语料每 12 小时
+        轮流消失。
+        """
+        if not bool(self._cfg("FUUUMUSIC_ENABLED", True)):
+            return {"status": "disabled"}
+
+        try:
+            html = await fetch_url(QA_PAGE_URL)
+            if not html:
+                return {"status": "error", "reason": "qa page fetch failed"}
+
+            sections_cfg = self._cfg("FUUUMUSIC_SECTIONS", []) or []
+            wanted = [str(s) for s in sections_cfg if str(s).strip()]
+            available = discover_sections(html)
+            sections = resolve_sections(wanted, available)
+            if wanted and not sections:
+                # 配置过的章节名在页面上一个都不存在(旧版目录名残留 / 站点改版):
+                # 不能据此导出 0 条,那等于把整个网页语料清零。
+                logger.warning(
+                    "[FeishuQA] FUUUMUSIC_SECTIONS 配置的章节均不存在于页面,"
+                    "本次按不过滤处理。配置=%s 页面实际=%s",
+                    wanted,
+                    available,
+                )
+            revision_id = int(datetime.now(UTC).timestamp())
+            entries = parse_qa_document(
+                html, revision_id=revision_id, sections=sections or None
+            )
+            if not entries:
+                # 站点改版等异常时宁可保留旧分片,也不要用空语料覆盖掉用户
+                # 已经能用的知识库。
+                return {
+                    "status": "error",
+                    "reason": f"no entries parsed (sections={sections})",
+                }
+
+            manifest = build_manifest(
+                ParseResult(entries=entries),
+                revision_id=revision_id,
+                document_id="fuuumusic_qa",
+                source=SOURCE_FUUUMUSIC,
+            )
+            images_ok, image_failures = await download_manifest_images(
+                manifest, self.data_root
+            )
+            self.store.save_slice(SOURCE_FUUUMUSIC, manifest)
+            merged = self._commit_merged()
+
+            return {
+                "status": "synced",
+                "entries": manifest["entry_count"],
+                "images": images_ok,
+                "image_failures": image_failures,
+                "corpus_entries": merged["entry_count"],
+                "sources": {k: v["kept"] for k, v in merged.get("sources", {}).items()},
+            }
+        except Exception as exc:
+            logger.warning("[FeishuQA] fuuumusic 同步失败: %s", exc)
+            return {"status": "error", "reason": str(exc)}
+
+    def _commit_merged(self) -> dict:
+        """由全部分片重算合并快照并热替换检索器。
+
+        分片顺序即优先级:飞书在前——网页里的 FAQ 部分是飞书文档的镜像
+        (同章节同标题 → 同 ID),飞书那份是人工维护的原文且图片已落地。
+        """
+        merged = merge_manifests(
+            [
+                (SOURCE_FEISHU, self.store.load_slice(SOURCE_FEISHU)),
+                (SOURCE_FUUUMUSIC, self.store.load_slice(SOURCE_FUUUMUSIC)),
+            ]
+        )
+        self.store.commit(merged)
+        self._load_corpus()
+        return merged
 
     # ── 指令 ──
 
@@ -881,6 +1035,19 @@ class FeishuQaPlugin(Star):
             "请勿复述条目正文,链接里含图文步骤。"
         )
 
+    def _attribution_for(self, entries: list) -> str:
+        """按条目来源给署名——链接指向哪里就署哪里的名。
+
+        混投时用中性说法:一轮里同时发出飞书与网页条目,任何单边署名都只
+        覆盖一半,反而误导。
+        """
+        sources = {str(getattr(e, "source", "") or SOURCE_FEISHU) for e in entries}
+        if sources == {SOURCE_FUUUMUSIC}:
+            return SOURCE_ATTRIBUTION_FUUUMUSIC
+        if len(sources) > 1:
+            return SOURCE_ATTRIBUTION_MIXED
+        return SOURCE_ATTRIBUTION
+
     def _format_links(self, event, entries: list) -> DirectAnswer:
         """所有用户可见链接消息的唯一出口。
 
@@ -895,6 +1062,7 @@ class FeishuQaPlugin(Star):
             entries,
             url_of=self._wiki_block_url,
             markdown=platform_name == "qq_official",
+            attribution=self._attribution_for(entries),
         )
 
     def _build_link_list(self, event, entries: list) -> DirectAnswer:
@@ -909,12 +1077,21 @@ class FeishuQaPlugin(Star):
         return self._format_links(event, entries)
 
     def _wiki_block_url(self, entry) -> str:
-        """构造飞书文档锚点直达链接(WIKI_URL#block_id);无定位时退回整篇。"""
+        """条目直达链接。
+
+        网页来源的条目 ``source_locator`` 本身就是**可点的完整 URL**
+        (``.../cakewalk-sonar-faq/all#q38``),直接返回;否则按飞书文档锚点拼。
+        多来源之前只有"飞书锚点"一种拼法,网页条目的定位符会被拼成
+        ``<wiki>#https://www.fuuumusic.com/...#q38`` 这种废链。
+        """
+        locator = str(getattr(entry, "source_locator", "") or "").strip()
+        if locator.startswith(("http://", "https://")):
+            return locator
         base = str(self._cfg("WIKI_URL", "") or "").strip().rstrip("/")
         if not base:
             return "(未配置 WIKI_URL)"
-        if entry.source_locator:
-            return f"{base}#{entry.source_locator}"
+        if locator:
+            return f"{base}#{locator}"
         return base
 
     @filter.on_llm_tool_respond()
@@ -1144,6 +1321,19 @@ class FeishuQaPlugin(Star):
             yield event.plain_result(f"同步完成: {result}")
         except Exception as exc:
             yield event.plain_result(f"同步失败(旧语料继续服务): {exc}")
+
+    @filter.command("fuuumusic_sync")
+    async def fuuumusic_sync(self, event: AstrMessageEvent):
+        """手动触发 fuuumusic.com 同步(管理员)。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可用")
+            return
+        yield event.plain_result("开始同步 fuuumusic.com…")
+        try:
+            result = await self._sync_fuuumusic()
+            yield event.plain_result(f"fuuumusic 同步完成: {result}")
+        except Exception as exc:
+            yield event.plain_result(f"fuuumusic 同步失败: {exc}")
 
     @filter.command("qa_reload")
     async def qa_reload(self, event: AstrMessageEvent):
