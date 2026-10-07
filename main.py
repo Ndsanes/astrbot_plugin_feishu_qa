@@ -815,9 +815,12 @@ class FeishuQaPlugin(Star):
                 query=text,
                 results=plan.candidates,
             )
+            event.set_extra("_qa_relevant", True)
             return
 
         # miss:证据不足,不回复、不阻断 → 主 Agent 正常接管
+        is_qa = bool(plan.candidates) and plan.candidates[0].score >= 1.0
+        event.set_extra("_qa_relevant", is_qa)
         self._log_decision(
             stage="route", action="miss", query=text, results=plan.candidates
         )
@@ -1023,11 +1026,16 @@ class FeishuQaPlugin(Star):
 
     @filter.on_llm_request()
     async def add_faq_citation_guidance(self, event: AstrMessageEvent, req) -> None:
-        """注入 FAQ 引用规范(恒定文本,前缀缓存安全)。
+        """注入 FAQ 引用规范(仅在问答链路有效);日常对话丢弃工具与提示词。"""
+        is_qa = bool(event.get_extra("_qa_relevant"))
+        if not is_qa:
+            # 日常闲聊/普通对话:从 tools 中剥离 qa_send_answer,保持纯净聊天 BOT
+            if hasattr(req, "func_tool") and req.func_tool:
+                if hasattr(req.func_tool, "remove_tool"):
+                    req.func_tool.remove_tool("qa_send_answer")
+            return
 
-        条目发现由知识块内的 [ref:短码] 承载,模型从检索结果中原样搬运
-        短码调用 qa_send_answer;此处不再做词法预判与动态注入。
-        """
+        # 确认为业务提问链路:注入 FAQ 引用规范
         req.system_prompt = (req.system_prompt or "") + _FAQ_CITATION_GUIDANCE
 
     # ── 管理指令 ──

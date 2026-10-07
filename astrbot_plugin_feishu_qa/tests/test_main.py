@@ -118,6 +118,13 @@ class TestGroupWakeListener:
         run_handler(plugin.on_group_message(event))
         assert not event.sent and not event.is_stopped(), "未唤醒消息必须零响应"
 
+    def test_chitchat_marked_not_qa_relevant(self, plugin: FeishuQaPlugin) -> None:
+        event = AstrMessageEvent(message_str="@bot ping!", group_id="g1")
+        event.is_at_or_wake_command = True
+        run_handler(plugin.on_group_message(event))
+        assert not event.is_stopped(), "未命中高置信度直达的消息放行给主 Agent"
+        assert event.get_extra("_qa_relevant") is False, "日常寒暄 ping! 必须标记为非 QA 业务提问"
+
 
 class TestFaqCitationGuidance:
     """on_llm_request 钩子:FAQ 出处引用规范注入。"""
@@ -137,7 +144,9 @@ class TestFaqCitationGuidance:
                 self.system_prompt = "base-prompt"
 
         req = Req()
-        run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
+        ev = AstrMessageEvent()
+        ev.set_extra("_qa_relevant", True)
+        run_handler(plugin.add_faq_citation_guidance(ev, req))
         assert req.system_prompt.startswith("base-prompt")
         assert "章节直达链接" in req.system_prompt
         assert "qa_send_answer" not in req.system_prompt  # 附链已自动化,模型无需调用
@@ -147,8 +156,33 @@ class TestFaqCitationGuidance:
             system_prompt = ""
 
         req = Req()
-        run_handler(plugin.add_faq_citation_guidance(AstrMessageEvent(), req))
+        ev = AstrMessageEvent()
+        ev.set_extra("_qa_relevant", True)
+        run_handler(plugin.add_faq_citation_guidance(ev, req))
         assert req.system_prompt.startswith("\n[FAQ 引用规范]")
+
+    def test_chitchat_drops_qa_tool_and_skips_guidance(self, plugin: FeishuQaPlugin) -> None:
+        """日常闲聊/非问答:剥离 qa_send_answer 工具且不追加 FAQ 提示词。"""
+        class MockToolSet:
+            def __init__(self) -> None:
+                self.tools = ["qa_send_answer", "send_message_to_user"]
+
+            def remove_tool(self, name: str) -> None:
+                self.tools = [t for t in self.tools if t != name]
+
+        class Req:
+            def __init__(self) -> None:
+                self.system_prompt = "base-prompt"
+                self.func_tool = MockToolSet()
+
+        req = Req()
+        ev = AstrMessageEvent()
+        # 未设置或为 False，代表日常聊天
+        run_handler(plugin.add_faq_citation_guidance(ev, req))
+
+        assert req.system_prompt == "base-prompt"
+        assert "qa_send_answer" not in req.func_tool.tools
+        assert "send_message_to_user" in req.func_tool.tools
 
 
 
