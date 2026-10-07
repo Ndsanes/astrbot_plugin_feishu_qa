@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -20,10 +21,34 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
 from .adapter.gateway import DOC_FORMAT_XML, GatewayClient
-from .answer.direct import DirectAnswer
+from .answer.direct import DirectAnswer, format_link_list
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests
+from .corpus.model import extract_symptom_tags, normalize_title
 from .corpus.parser import parse_xml
+from .fuuumusic import (
+    discover_sections,
+    fetch_all_pages,
+    fetch_url,
+    page_to_entry,
+    parse_sitemap,
+)
+from .jev.client import DEFAULT_ENDPOINT as DEFAULT_JEV_ENDPOINT
+from .jev.client import DEFAULT_MODEL as DEFAULT_JEV_MODEL
+from .jev.client import JevClient, noul_question
+from .jev.policy import (
+    ACTION_ANSWER_SELF,
+    ACTION_FALLBACK,
+    ANY_QID,
+    RANK_QID,
+    JevCandidate,
+    JevDecision,
+    build_questions,
+    build_state,
+    decide_links,
+    decide_takeover,
+    option_key,
+)
 from .learn.candidate import (
     build_learn_prompt,
     candidate_to_pending_record,
@@ -34,6 +59,12 @@ from .learn.candidate import (
     parse_candidate,
 )
 from .retrieval.scorer import Retriever
+from .storage.decision_log import (
+    CandidateRecord,
+    DecisionCache,
+    DecisionLog,
+    DecisionRecord,
+)
 from .storage.snapshot import SnapshotStore
 
 PLUGIN_NAME = "astrbot_plugin_feishu_qa"
@@ -41,6 +72,20 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 
 # 单轮自动附链上限:链接是承诺不是列表,多则刷屏且冲淡主答案。
 _MAX_AUTO_LINKS = 3
+
+# 模糊档(MEDIUM)链接条数:刻意少于直答档,降低错误链接的曝光面。
+_MAX_TENTATIVE_LINKS = 2
+
+# 送进 Jev 的候选正文截断长度。jaggedness #5:state 里无关内容越多准确率越低,
+# 手册条目正文动辄上千字,不截断会把判断稀释掉。
+_JEV_TEXT_CHARS = 600
+
+# 送进 Jev 的候选条数上限。Jev 一次调用并行求值全部候选,条数越多 state 越大;
+# 本地检索本来就只取前 _MAX_TENTATIVE_LINKS+1,这里再兜一层底。
+_JEV_MAX_CANDIDATES = 3
+
+# 金丝雀探测条数:足够看出分歧率的量级,又不至于在插件加载时打太多次外网。
+_JEV_SELFTEST_PROBES = 4
 
 # FAQ 引用规范:随 on_llm_request 注入的静态短文本(恒定内容不破坏提示词缓存)。
 _FAQ_CITATION_GUIDANCE = (
@@ -59,7 +104,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.8.9",
+    "0.9.11",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -80,6 +125,24 @@ class FeishuQaPlugin(Star):
         self._retriever: Retriever | None = None
         self._entry_refs: dict = {}
         self._router: AnswerRouter | None = None
+        self._revision: int | str | None = None
+
+        # 决策日志与问题级记忆:阈值此前只在 20 条手挑样本上校准过,
+        # 真实分布只能靠线上观测回填。两者都是纯观测手段,故障一律静默。
+        self._decision_log = DecisionLog(
+            self.data_root,
+            enabled=bool(self._cfg("DECISION_LOG_ENABLED", True)),
+            text_mode=str(self._cfg("DECISION_LOG_TEXT_MODE", "truncate")),
+            max_text_chars=int(self._cfg("DECISION_LOG_MAX_TEXT_CHARS", 200)),
+        )
+        self._decision_cache = DecisionCache(
+            ttl_seconds=float(self._cfg("DECISION_CACHE_TTL_MINUTES", 240)) * 60
+        )
+
+        # Jev 决策模型:只在拿到 key 时构造。未配置 / 构造失败一律 None,
+        # 两个接管点见到 None 就走原本的本地判定,行为与未接入时完全一致。
+        self._jev: JevClient | None = self._build_jev()
+
         self._load_corpus()
 
         self._pending_learn: dict[str, dict] = {}  # user_id -> candidate
@@ -101,6 +164,372 @@ class FeishuQaPlugin(Star):
     def _cfg(self, key: str, default=None):
         value = self.config.get(key, default)
         return default if value is None else value
+
+    # ── 决策日志 ──
+
+    def _thresholds(self) -> dict[str, float]:
+        """当前生效的阈值,随每条决策一起落盘——事后才能复现"当时按什么判的"。"""
+        r = self._retriever
+        if r is None:
+            return {}
+        return {"high": r.high_threshold, "medium": r.medium_threshold}
+
+    def _candidate_records(self, results, query: str) -> list[CandidateRecord]:
+        """把检索结果转成日志用的打分明细。
+
+        ``supported`` 必须拿**本次判定基准的那句 query** 重算(与判定本身
+        同源),不能记成 True——否则日志会高估自己的支撑闸门命中率。
+        """
+        if not results or self._retriever is None:
+            return []
+        return [
+            CandidateRecord(
+                entry_id=r.entry.id,
+                title=r.entry.raw_title,
+                score=r.score,
+                confidence=r.confidence,
+                supported=self._retriever.supports_query(r.entry, query),
+            )
+            for r in results
+        ]
+
+    def _log_decision(
+        self,
+        *,
+        stage: str,
+        action: str,
+        query: str,
+        results=None,
+        cached: bool = False,
+        extra: dict | None = None,
+    ) -> bool:
+        """落一条决策。任何异常已被 DecisionLog 内部吞掉。返回是否落盘成功。"""
+        return self._decision_log.record(
+            DecisionRecord(
+                stage=stage,
+                action=action,
+                query=query,
+                candidates=self._candidate_records(results, query),
+                thresholds=self._thresholds(),
+                revision=self._revision,
+                cached=cached,
+                extra=extra or {},
+            )
+        )
+
+    def _tentative_enabled(self) -> bool:
+        return bool(self._cfg("TENTATIVE_ANSWER_ENABLED", False))
+
+    # ── Jev 决策模型 ──
+
+    def _build_jev(self) -> JevClient | None:
+        """按配置构造客户端;未启用或缺 key 时返回 None(调用方走本地判定)。"""
+        if not bool(self._cfg("JEV_ENABLED", False)):
+            return None
+        key = str(self._cfg("JEV_API_KEY", "") or "").strip()
+        if not key:
+            logger.warning("[FeishuQA] JEV_ENABLED=true 但未配置 JEV_API_KEY,按未启用处理")
+            return None
+        return JevClient(
+            key,
+            endpoint=str(self._cfg("JEV_ENDPOINT", "") or "").strip() or DEFAULT_JEV_ENDPOINT,
+            model=str(self._cfg("JEV_MODEL", "") or "").strip() or DEFAULT_JEV_MODEL,
+            timeout=float(self._cfg("JEV_TIMEOUT_SECONDS", 5.0)),
+        )
+
+    @staticmethod
+    def _jev_candidates(entries: list, *, limit: int) -> list[JevCandidate]:
+        """语料条目 → Jev 候选。文本截断:长 state 会稀释准确率(jaggedness #5)。"""
+        out: list[JevCandidate] = []
+        for e in entries[:limit]:
+            body = " ".join((e.body or "").split())
+            out.append(
+                JevCandidate(
+                    entry_id=e.id,
+                    title=normalize_title(e.raw_title),
+                    text=body[:_JEV_TEXT_CHARS],
+                )
+            )
+        return out
+
+    def _jev_ask(self, question: str, candidates: list[JevCandidate]):
+        """一次调用并行求值全部问题。任何失败返回 ok=False 的结果。"""
+        if self._jev is None or not candidates:
+            return None
+        try:
+            result = self._jev.evaluate(
+                build_state(question, candidates), build_questions(candidates)
+            )
+        except Exception as exc:  # 兜底:Jev 不得把整条应答链路带崩
+            logger.warning("[FeishuQA] Jev 调用异常,回落本地判定: %s", type(exc).__name__)
+            return None
+        # 成功也记一行:决策日志在 data/plugin_data 里,不方便从面板回读,
+        # 而"到底有没有真的调出去"是最需要一眼可见的事。
+        if result.ok:
+            ans = result.choice(RANK_QID)
+            top = max(ans.probabilities.values()) if ans and ans.probabilities else 0.0
+            logger.info(
+                "[FeishuQA] Jev 判定 cands=%d answerable=%.2f top_p=%.2f model=%s tok=%d",
+                len(candidates),
+                result.noul(ANY_QID) or 0.0,
+                top,
+                result.model,
+                result.input_tokens,
+            )
+        return result
+
+    def _log_jev(self, decision: JevDecision, *, stage: str, question: str, action: str) -> None:
+        """Jev 判定落决策日志,并打一行 INFO。
+
+        决策日志在 data/plugin_data/ 下,WebUI 不好回读;而"这次到底按 Jev
+        还是按本地规则做的决定"是最需要一眼可见的事,故同时落日志。
+        """
+        logger.info(
+            "[FeishuQA] Jev 决策 stage=%s action=%s reason=%s picked=%s",
+            stage, action, decision.reason, ",".join(decision.entry_ids) or "-",
+        )
+        self._log_decision(
+            stage=stage,
+            action=action,
+            query=question,
+            results=[],
+            extra={
+                "jev_action": decision.action,
+                "jev_reason": decision.reason,
+                "jev_nouls": {k: round(v, 4) for k, v in decision.nouls.items()},
+                "jev_probs": decision.probabilities,
+                "jev_picked": list(decision.entry_ids),
+            },
+        )
+
+    async def _jev_takeover(self, event, question: str, plan) -> bool:
+        """C 位点:由 Jev 判定这条 MEDIUM 查询是自己答还是交回主 Agent。
+
+        返回 True 表示"已处理完"(无论答了还是明确交回),调用方不要再走
+        本地模糊档分支。返回 False 表示 Jev 未启用或结果不可用,交回调用方
+        按原本的本地逻辑处理。
+
+        这里**只发模糊措辞**的章节指引,不贴正文、不附图。理由:Jev 的作用是
+        筛掉不够格的候选从而省掉一次 Agent 往返,不是让我们改用更激进的答法。
+        """
+        if self._jev is None:
+            return False
+        entries = [r.entry for r in plan.candidates[:_JEV_MAX_CANDIDATES]]
+        cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
+        result = self._jev_ask(question, cands)
+        if result is None:
+            return False
+
+        decision = decide_takeover(
+            cands,
+            result,
+            answerable_threshold=float(self._cfg("JEV_ANSWERABLE", 0.50)),
+            probability_threshold=float(self._cfg("JEV_TAKEOVER_PROBABILITY", 0.35)),
+        )
+        if decision.action == ACTION_FALLBACK:
+            return False
+
+        if decision.action == ACTION_ANSWER_SELF and decision.entry_ids:
+            picked = [e for e in entries if e.id in set(decision.entry_ids)]
+            self._log_jev(
+                decision, stage="route", question=question, action="jev_tentative_sent"
+            )
+            self._decision_cache.put(
+                question,
+                action="tentative",
+                entry_ids=[e.id for e in picked],
+                revision=self._revision,
+            )
+            await self._send_direct(event, self._build_tentative_list(event, picked))
+            event.stop_event()
+        else:
+            self._log_jev(
+                decision, stage="route", question=question, action="jev_hand_off"
+            )
+        return True
+
+    def _jev_selfcheck(self) -> None:
+        """启动时自检 Jev,并跑一遍**完整决策链**做金丝雀,结果写日志。
+
+        动机有两层:
+        1. 改完 `JEV_API_KEY` 之后,管理员最需要的是**立刻**知道能不能用,而不是
+           等第一条真实提问才发现鉴权失败或容器出不了网——那时的表现是"静默
+           回落���本地判定",看起来像功能没生效,实则可能只是 key 过期。
+        2. 只探活不够:连通 ≠ 判定链路通。这里用一条**自带已知答案**的探针
+           问题跑 ``router.route → Jev → decide_takeover → 落决策日志``,
+           因此每次重启都会在 ``decisions.jsonl`` 里留下一条 ``jev_selftest``
+           记录,既能看 Jev 通不通,也能看它**是否真的改变了结论**。
+
+        探针问题取自语料里第一条带问号的条目标题,因此**不依赖固定文案**,
+        语料换了仍然有效。失败只告警,插件照常以本地判定服务。
+        """
+        if self._jev is None:
+            return
+        probe = self._jev_probe_query()
+        try:
+            result = self._jev.evaluate(
+                state={"question": probe or "Cakewalk 无法激活", "candidates": []},
+                questions={
+                    "ping": noul_question(
+                        "Is the user asking about a Cakewalk software problem?",
+                        true="The question is about Cakewalk or its plugins.",
+                        false_="The question is not about Cakewalk at all.",
+                    )
+                },
+            )
+        except Exception as exc:  # 自检不得让插件起不来
+            logger.warning("[FeishuQA] Jev 自检异常: %s", type(exc).__name__)
+            return
+        if not result.ok:
+            logger.warning(
+                "[FeishuQA] Jev 自检失败(%s)——判定将静默回落到本地规则,机器人仍可用",
+                result.error,
+            )
+            return
+        logger.info(
+            "[FeishuQA] Jev 自检通过 model=%s ping=%.2f tok=%d",
+            result.model,
+            result.noul("ping") or 0.0,
+            result.input_tokens,
+        )
+        self._jev_selftest_sweep()
+
+    def _jev_probe_queries(self, limit: int = _JEV_SELFTEST_PROBES) -> list[str]:
+        """从语料里取若干条带问号的标题作为探针问题(不依赖写死文案)。
+
+        取**多条**而非一条:单条只是一次抽样,看不出 Jev 与本地结论的**分歧率**。
+        这里按语料顺序取,不挑题——挑一条已知会分歧的当探针就是自欺。
+        """
+        out: list[str] = []
+        for entry in self._entries:
+            _, stripped = extract_symptom_tags(entry.raw_title)
+            q = stripped.split("？")[0].split("?")[0].strip()
+            if len(q) >= 6 and q not in out:
+                out.append(q)
+            if len(out) >= limit:
+                break
+        return out
+
+    def _jev_probe_query(self) -> str:
+        """单条探针(供 /jev_probe 之外的旧调用点使用)。"""
+        queries = self._jev_probe_queries(1)
+        return queries[0] if queries else ""
+
+    def _jev_selftest_sweep(self) -> None:
+        """扫若干条语料自带问句,统计 Jev 与本地结论的分歧率。
+
+        为什么扫多条:标准里要的是"观察到一次因 Jev 结论而改变的路由结果"。
+        拿单条已知会分歧的题当探针是自欺;按语料顺序取若干条、如实报出
+        分歧几次,才是真观测——分歧为 0 也是有价值的结论。
+
+        每条都走完整链路并落一条 ``jev_selftest`` 记录。
+        """
+        queries = self._jev_probe_queries()
+        if not queries:
+            return
+        diverged: list[str] = []
+        for q in queries:
+            picked, local = self._jev_selftest_chain(q)
+            if picked and local and picked != local:
+                diverged.append(q)
+        logger.info(
+            "[FeishuQA] Jev 金丝雀: 探测 %d 条,Jev 与本地结论分歧 %d 条%s",
+            len(queries), len(diverged),
+            f" → {diverged[:2]}" if diverged else "",
+        )
+
+    def _jev_selftest_chain(self, question: str) -> tuple[str, str]:
+        """金丝雀:跑完整决策链,落一条 jev_selftest 决策记录。
+
+        记录里同时写本地结论与 Jev 结论,便于一眼看出 Jev 有没有改变动作。
+        全程不发消息、不阻断、只写自己的决策日志。
+        """
+        if self._retriever is None or not question:
+            return "", ""
+        try:
+            # 同样**不走 router**:router 带群白名单门禁,而自检用的 group_id
+            # 不在白名单里,会被判 denied 拿不到候选(与 /jev_probe 同一个坑)。
+            results = self._retriever.search(question, top_k=_JEV_MAX_CANDIDATES)
+            entries = [r.entry for r in results]
+            cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
+            result = self._jev_ask(question, cands)
+        except Exception as exc:
+            logger.warning("[FeishuQA] Jev 决策链自检异常: %s", type(exc).__name__)
+            return "", ""
+        if result is None or not result.ok or not entries:
+            logger.info(
+                "[FeishuQA] Jev 决策链自检跳过: cands=%d jev=%s",
+                len(entries), result.error if result else "no_client",
+            )
+            return "", ""
+
+        decision = decide_takeover(
+            cands,
+            result,
+            answerable_threshold=float(self._cfg("JEV_ANSWERABLE", 0.50)),
+            probability_threshold=float(self._cfg("JEV_TAKEOVER_PROBABILITY", 0.35)),
+        )
+        local_pick = entries[0].id if entries else ""
+        changed = decision.action == ACTION_ANSWER_SELF and bool(
+            decision.entry_ids
+        ) and local_pick not in decision.entry_ids
+        written = self._log_decision(
+            stage="route",
+            action="jev_selftest",
+            query=question,
+            results=results,
+            extra={
+                "jev_action": decision.action,
+                "jev_reason": decision.reason,
+                "jev_nouls": {k: round(v, 4) for k, v in decision.nouls.items()},
+                "jev_probs": decision.probabilities,
+                "jev_picked": list(decision.entry_ids),
+                "local_top1": local_pick,
+                "local_score": round(results[0].score, 3),
+                "changed_vs_local": changed,
+            },
+        )
+        logger.info(
+            "[FeishuQA] Jev 决策链自检: local_top1=%s(score=%.2f) jev=%s(%s)%s "
+            "picked=%s 落盘=%s",
+            local_pick,
+            results[0].score,
+            decision.action,
+            decision.reason,
+            " [与本地不同]" if changed else "",
+            ",".join(decision.entry_ids) or "-",
+            "ok" if written else "FAIL",
+        )
+        return (decision.entry_ids[0] if decision.entry_ids else ""), local_pick
+
+    def _jev_filter_links(
+        self, question: str, entries: list
+    ) -> JevDecision | None:
+        """D 位点:由 Jev 判定这批候选章节哪些值得附给用户。
+
+        返回 None 表示 Jev 未启用/不可用,调用方改用本地 ``linkable_entries``。
+        判定基准恒为**用户原问题**——2026-09-15 事故的根因就是拿模型那次
+        检索词当基准,而检索相关度是为检索词服务的,与用户问什么无关。
+
+        阈值刻意高于 C 位点:附链是对用户的承诺,发错章节的代价是信任,
+        而漏发一条指引的代价只是少个参考(主 Agent 的正文回答还在)。
+        """
+        if self._jev is None or not question or not entries:
+            return None
+        cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
+        result = self._jev_ask(question, cands)
+        if result is None:
+            return None
+        decision = decide_links(
+            cands,
+            result,
+            answerable_threshold=float(self._cfg("JEV_ANSWERABLE", 0.50)),
+            probability_threshold=float(self._cfg("JEV_LINK_PROBABILITY", 0.45)),
+            max_links=_MAX_AUTO_LINKS,
+        )
+        if decision.action == ACTION_FALLBACK:
+            return None
+        return decision
 
     # ── 语料装载 ──
 
@@ -132,9 +561,12 @@ class FeishuQaPlugin(Star):
                 enabled_groups=list(self._cfg("ENABLED_GROUPS", [])),
                 max_images=int(self._cfg("MAX_IMAGES", 3)),
             )
+            self._revision = manifest.get("revision_id")
+            # 语料换了 revision,旧判定对新语料不再成立,记忆整体作废。
+            self._decision_cache.clear()
             logger.info(
                 "[FeishuQA] 语料已装载 revision=%s entries=%d",
-                manifest.get("revision_id"),
+                self._revision,
                 len(entries),
             )
             return True
@@ -161,9 +593,53 @@ class FeishuQaPlugin(Star):
             )
         if int(self._cfg("SYNC_INTERVAL_HOURS", 12)) > 0:
             self._sync_task = asyncio.create_task(self._sync_loop())
+        if bool(self._cfg("FUUUMUSIC_ENABLED", True)):
+            self._fuuumusic_task = asyncio.create_task(self._fuuumusic_sync_loop())
+            self._update_fuuumusic_schema()
+        if bool(self._cfg("JEV_SELFTEST_ON_LOAD", True)):
+            # 同步执行:管理员在日志里立刻能看到 key/网络是否通,而不是等首问
+            self._jev_selfcheck()
+
+    def _update_fuuumusic_schema(self) -> None:
+        """从 sitemap 获取最新目录列表，更新 _conf_schema.json 的 default 字段。"""
+        try:
+            import json
+            from pathlib import Path
+
+            schema_path = Path(__file__).parent / "_conf_schema.json"
+            if not schema_path.exists():
+                return
+
+            # 同步获取 sitemap（initialize 是 async，但这里用同步方式避免阻塞）
+            import urllib.request
+
+            req = urllib.request.Request(
+                "https://www.fuuumusic.com/sitemap.xml",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                sitemap_xml = resp.read().decode("utf-8")
+
+            sections = discover_sections(sitemap_xml)
+            if not sections:
+                return
+
+            # 读取当前 schema
+            schema = json.loads(schema_path.read_text())
+
+            # 更新 FUUUMUSIC_SECTIONS 的 default
+            if "FUUUMUSIC_SECTIONS" in schema:
+                schema["FUUUMUSIC_SECTIONS"]["default"] = {s: False for s in sections}
+                schema_path.write_text(json.dumps(schema, ensure_ascii=False, indent=2))
+                logger.info(
+                    "[FeishuQA] fuuumusic schema 已更新，发现 %d 个目录",
+                    len(sections),
+                )
+        except Exception as exc:
+            logger.warning("[FeishuQA] fuuumusic schema 更新失败: %s", exc)
 
     async def terminate(self) -> None:
-        for task in (self._sync_task,):
+        for task in (self._sync_task, getattr(self, "_fuuumusic_task", None)):
             if task:
                 task.cancel()
 
@@ -182,6 +658,18 @@ class FeishuQaPlugin(Star):
                 logger.warning("[FeishuQA] 同步失败(旧语料继续服务): %s", exc)
             await asyncio.sleep(interval)
 
+    async def _fuuumusic_sync_loop(self) -> None:
+        interval = int(self._cfg("FUUUMUSIC_SYNC_INTERVAL_HOURS", 24)) * 3600
+        await asyncio.sleep(60)  # 启动后稍等,避免与飞书同步争抢带宽
+        while True:
+            try:
+                result = await self._sync_fuuumusic()
+                logger.info("[FeishuQA] fuuumusic 定时同步: %s", result)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("[FeishuQA] fuuumusic 同步失败: %s", exc)
+            await asyncio.sleep(interval)
 
     async def sync_once(self) -> dict:
         """抓取→解析→下载缺失图→原子提交→热替换检索器。"""
@@ -251,6 +739,71 @@ class FeishuQaPlugin(Star):
             "relinked": len(relinked),
         }
 
+    async def _sync_fuuumusic(self) -> dict:
+        """从 fuuumusic.com 抓取中文资料并合并到语料。"""
+        if not bool(self._cfg("FUUUMUSIC_ENABLED", True)):
+            return {"status": "disabled"}
+
+        try:
+            # 1. 解析 sitemap
+            sitemap_xml = await fetch_url("https://www.fuuumusic.com/sitemap.xml")
+            if sitemap_xml is None:
+                return {"status": "error", "reason": "sitemap fetch failed"}
+
+            urls = parse_sitemap(sitemap_xml)
+            if not urls:
+                return {"status": "error", "reason": "no FAQ/help URLs found"}
+
+            # 2. 抓取页面
+            pages = await fetch_all_pages(urls)
+            if not pages:
+                return {"status": "error", "reason": "no pages fetched"}
+
+            # 3. 转换为 QaEntry
+            revision_id = int(datetime.now(UTC).timestamp())
+            new_entries = [page_to_entry(p, revision_id=revision_id) for p in pages]
+
+            # 4. 合并到现有 manifest
+            old = self.store.load()
+            if old and old.get("source") == "fuuumusic.com":
+                # 已有 fuuumusic 数据，合并
+                existing_ids = {e["id"] for e in old.get("entries", [])}
+                merged = list(old.get("entries", []))
+                added = 0
+                for entry in new_entries:
+                    if entry.id not in existing_ids:
+                        merged.append(entry.to_dict())
+                        added += 1
+                if added == 0:
+                    return {"status": "unchanged", "pages": len(pages)}
+                old["entries"] = merged
+                old["entry_count"] = len(merged)
+                old["revision_id"] = revision_id
+                old["built_at"] = datetime.now(UTC).isoformat()
+                manifest = old
+            else:
+                # 首次导入或从其他源切换
+                from .corpus.parser import ParseResult
+                parsed = ParseResult(entries=new_entries)
+                manifest = build_manifest(
+                    parsed, revision_id=revision_id, document_id="fuuumusic_com"
+                )
+                manifest["source"] = "fuuumusic.com"
+
+            # 5. 提交并重新加载
+            store = SnapshotStore(self.data_root)
+            store.commit(manifest)
+            self._load_corpus()
+
+            return {
+                "status": "synced",
+                "pages": len(pages),
+                "entries": manifest.get("entry_count", len(new_entries)),
+            }
+        except Exception as exc:
+            logger.warning("[FeishuQA] fuuumusic 同步失败: %s", exc)
+            return {"status": "error", "reason": str(exc)}
+
     # ── 指令 ──
 
     def _is_admin(self, event: AstrMessageEvent) -> bool:
@@ -304,24 +857,96 @@ class FeishuQaPlugin(Star):
         if not event.is_at_or_wake_command:
             return
         text = self._strip_wake(event.message_str)
-        if not text or text.startswith(("/问", "/qa")):
-            return  # 指令路径交给 command handler
+        if not text or text.startswith("/"):
+            # 任何 `/` 开头的都是指令(含别名),一律交给 command handler。
+            # 原先只放过 /问 与 /qa,导致 /jev_probe、/qa_sync、/learn 等被
+            # @ 之后仍被当成提问送进判定链路——线上实测 /jev_probe 文本里的
+            # "midi 键盘怎么连" 真的被判成提问并触发了 Jev。
+            return
         router = self._router
         if router is None:
             return
-        plan = router.route(
-            text, group_id=event.get_group_id(), umo=event.unified_msg_origin
-        )
+        group_id = event.get_group_id()
+        umo = event.unified_msg_origin
+
+        # 同一问题在 TTL 内重复问 → 复用首次判定,杜绝"同一句问两次答案不同"。
+        cached = self._decision_cache.get(text, revision=self._revision)
+        if cached is not None:
+            entry_ids = list(cached["entry_ids"])
+            if cached["action"] == "direct" and entry_ids:
+                entry = self._entry_refs.get(entry_ids[0])
+                if entry is not None:
+                    self._log_decision(
+                        stage="route",
+                        action="direct",
+                        query=text,
+                        results=[],
+                        cached=True,
+                    )
+                    await self._send_direct(
+                        event, self._build_link_list(event, [entry])
+                    )
+                    event.stop_event()
+                    return
+
+        plan = router.route(text, group_id=group_id, umo=umo, top_k=_MAX_TENTATIVE_LINKS + 1)
+
         if plan.kind == "direct" and plan.direct:
             entry = self._entry_refs.get(plan.direct.entry_id)
+            self._decision_cache.put(
+                text,
+                action="direct",
+                entry_ids=[plan.direct.entry_id],
+                revision=self._revision,
+            )
+            self._log_decision(
+                stage="route", action="direct", query=text, results=plan.candidates
+            )
             if entry is not None:
-                await self._send_direct(
-                    event, self._build_link_list(event, [entry])
-                )
+                await self._send_direct(event, self._build_link_list(event, [entry]))
             else:
                 await self._send_direct(event, plan.direct)
             event.stop_event()
-        # miss/medium:不回复、不阻断 → 主 Agent 正常接管(可调 search tool)
+            return
+
+        if plan.kind == "tentative":
+            # MEDIUM 区:证据不足以断言"这就是答案",但可能有用。
+            if await self._jev_takeover(event, text, plan):
+                return
+            # Jev 未启用/不可用 → 沿用纯本地的模糊档开关,行为与 v0.9.0 一致。
+            if self._tentative_enabled():
+                picked = [r.entry for r in plan.candidates[:_MAX_TENTATIVE_LINKS]]
+                self._log_decision(
+                    stage="route",
+                    action="tentative_sent",
+                    query=text,
+                    results=plan.candidates,
+                )
+                self._decision_cache.put(
+                    text,
+                    action="tentative",
+                    entry_ids=[e.id for e in picked],
+                    revision=self._revision,
+                )
+                await self._send_direct(
+                    event,
+                    self._build_tentative_list(event, picked),
+                )
+                event.stop_event()
+                return
+            # 关闭时也记录:一周后据此判断"若开启会发出什么",零风险回放。
+            self._log_decision(
+                stage="route",
+                action="tentative_disabled",
+                query=text,
+                results=plan.candidates,
+            )
+            return
+
+        # miss:证据不足,不回复、不阻断 → 主 Agent 正常接管
+        self._log_decision(
+            stage="route", action="miss", query=text, results=plan.candidates
+        )
 
 
     @filter.llm_tool(name="qa_send_answer")
@@ -336,70 +961,75 @@ class FeishuQaPlugin(Star):
                 多个用英文逗号分隔
         """
         wanted = [s for s in re.split(r"[,，、;\s]+", entry_ids or "") if s.strip()]
-        entries, skipped, seen = [], [], set()
+        entries, invalid, seen = [], [], set()
         for raw in wanted:
             # 魔法短码(Modu ADR-011):知识块携带的引用码 → 语料条目;
             # 完整条目 ID 亦接受。映射外取值一律拒绝,模型无法猜测绕过。
             entry = self._entry_refs.get(raw)
             if entry is None:
-                skipped.append(raw)
+                invalid.append(raw)
                 continue
             if entry.id in seen:
                 continue
             seen.add(entry.id)
             entries.append(entry)
+        skipped = list(invalid)
+
+        # 会话级去重:自动附链(auto_send_faq_links / Jev 闸门)已经发过的条目,
+        # 模型再点一次不再重发。线上实测 2026-09-27:用户问"cakewalk 打不开了",
+        # Jev 闸门发出【打开就闪退】,主 Agent 随后又调 qa_send_answer 重发同一条,
+        # 用户收到两条内容重复的链接消息。此处补齐去重,跳过项照实回报给模型。
+        already = set(event.get_extra("_faq_links_sent") or ())
+        duplicated: list[str] = []
+        if already:
+            fresh = [e for e in entries if e.id not in already]
+            duplicated = [e.raw_title[:16] for e in entries if e.id in already]
+            entries = fresh
         if not entries:
-            bad = ",".join(skipped) if skipped else "未提供有效条目"
+            if duplicated:
+                detail = ",".join(duplicated + invalid)
+                return f"未重复投递:这轮问里已发过({detail})"
+            bad = ",".join(invalid) if invalid else "未提供有效条目"
             return f"发送失败:没有可投递的条目({bad})"
 
-        # v0.7.4 曾因 source_locator 为空误判"markdown 渲染剥锚点"而全面
-        # 回退裸链接;with-ids 修复后锚点真实可用,qq_official 恢复原生
-        # markdown 超链接(msg_type=2 默认渲染,标题可点击)。其他平台
-        # (OneBot 纯文本)维持"标题行 + 👉 裸链接"避免字面量输出。
-        platform_name = ""
-        with contextlib.suppress(Exception):
-            platform_name = str(event.get_platform_name() or "")
-
-        lines = [f"命中 {len(entries)} 条肖闻的解答:"]
-        for i, entry in enumerate(entries, 1):
-            url = self._wiki_block_url(entry)
-            if platform_name == "qq_official":
-                safe_title = entry.raw_title.replace("[", "［").replace("]", "］")
-                lines.append(f"\n{i}. [{safe_title}]({url})")
-            else:
-                lines.append(f"\n{i}、【{entry.raw_title}】")
-                lines.append(f"👉 {url}")
-        lines.append("\n > Xiaowenn《有福同享全家桶Q&A汇总》")
-        direct = DirectAnswer(
-            text="\n".join(lines), image_paths=[], entry_id=entries[0].id
-        )
+        direct = self._format_links(event, entries)
         # 单次 event.send 投出整块;经此而非 set_result:Agent 循环保持存活。
         await self._send_direct(event, direct)
         note = f";已跳过:{','.join(skipped)}" if skipped else ""
-        titles = "》《".join(e.raw_title for e in entries)
+        if duplicated:
+            note += f";已发过不重发:{','.join(duplicated)}"
+        titles = "》《".join(normalize_title(e.raw_title) for e in entries)
         return (
             f"已投递{len(entries)}条章节直达链接:《{titles}》{note};"
             "请勿复述条目正文,链接里含图文步骤。"
         )
 
-    def _build_link_list(self, event, entries: list) -> DirectAnswer:
-        """条目列表 → 链接列表载荷(qq_official 用 markdown 超链接,其余裸链接)。"""
+    def _format_links(self, event, entries: list) -> DirectAnswer:
+        """所有用户可见链接消息的唯一出口。
+
+        四条投递路径(高置信直答 / 模糊档 / LLM 工具投递 / 自动附链)曾各写各
+        的头部与尾部,线上一次回答里能同时看到三种格式,用户无从判断"这是不
+        是同一种东西"。措辞与版式全部收口到 ``format_link_list``。
+        """
         platform_name = ""
         with contextlib.suppress(Exception):
             platform_name = str(event.get_platform_name() or "")
-        lines = [f" >  直接命中 {len(entries)} 条肖闻的解答: \n"]
-        md = platform_name == "qq_official"
-        for i, entry in enumerate(entries, 1):
-            url = self._wiki_block_url(entry)
-            if md:
-                safe_title = entry.raw_title.replace("[", "［").replace("]", "］")
-                lines.append(f"{i}. [{safe_title}]({url})")
-            else:
-                lines.append(f"{i}、【{entry.raw_title}】👉 {url}")
-        lines.append("\n > Xiaowenn《有福同享全家桶Q&A汇总》")
-        return DirectAnswer(
-            text="\n".join(lines), image_paths=[], entry_id=entries[0].id
+        return format_link_list(
+            entries,
+            url_of=self._wiki_block_url,
+            markdown=platform_name == "qq_official",
         )
+
+    def _build_link_list(self, event, entries: list) -> DirectAnswer:
+        """章节链接列表(直答路径;与其它路径共用同一格式)。"""
+        return self._format_links(event, entries)
+
+    def _build_tentative_list(self, event, entries: list) -> DirectAnswer:
+        """模糊档的章节链接列表——与直答/工具/自动附链格式完全一致。
+
+        保留方法名只为让 C 位点的调用点自解释;它不再有任何独立措辞。
+        """
+        return self._format_links(event, entries)
 
     def _wiki_block_url(self, entry) -> str:
         """构造飞书文档锚点直达链接(WIKI_URL#block_id);无定位时退回整篇。"""
@@ -441,38 +1071,80 @@ class FeishuQaPlugin(Star):
             entry = self._entry_refs.get(code)
             if entry is not None:
                 candidates.append(entry)
-        if not candidates:
-            return
         # 判定基准是用户原问题(剥掉 @唤醒),不是模型的检索词。
         question = self._strip_wake(getattr(event, "message_str", "") or "")
+        if not candidates:
+            self._log_decision(
+                stage="linkable",
+                action="links_suppressed",
+                query=question,
+                results=[],
+                extra={"reason": "no_ref_matched", "n_refs": len(codes)},
+            )
+            return
         retriever = self._retriever
-        if retriever is not None and question:
+        n_before = len(candidates)
+        jev_decision = self._jev_filter_links(question, candidates)
+        if jev_decision is not None:
+            kept = set(jev_decision.entry_ids)
+            candidates = [e for e in candidates if e.id in kept]
+            if not candidates:
+                self._log_jev(
+                    jev_decision,
+                    stage="linkable",
+                    question=question,
+                    action="jev_links_suppressed",
+                )
+                return
+            self._log_jev(
+                jev_decision,
+                stage="linkable",
+                question=question,
+                action="jev_links_sent",
+            )
+        elif retriever is not None and question:
             candidates = retriever.linkable_entries(
                 question, candidates, max_n=_MAX_AUTO_LINKS
             )
         else:
             candidates = candidates[:_MAX_AUTO_LINKS]
+        if not candidates:
+            # 闸门全灭:这正是 2026-09-15 事故要拦的形态(检索命中但答非所问)。
+            # 抑制原因落盘,一周后可直接统计闸门的真实拦截率与误杀率。
+            self._log_decision(
+                stage="linkable",
+                action="links_suppressed",
+                query=question,
+                results=[],
+                extra={"reason": "gate_rejected_all", "n_refs": n_before},
+            )
+            return
         sent = set(event.get_extra("_faq_links_sent") or ())
         new_entries = [e for e in candidates if e.id not in sent]
         if not new_entries:
+            # 候选全部已在会话内投过:不重复打扰,但判定本身仍记一条,
+            # 否则"附链被抑制"与"附链重复"在日志里无法区分。
+            self._log_decision(
+                stage="linkable",
+                action="links_suppressed",
+                query=question,
+                results=[],
+                extra={"reason": "all_already_sent", "n_candidates": len(candidates)},
+            )
             return
         sent.update(e.id for e in new_entries)
-        platform_name = ""
-        with contextlib.suppress(Exception):
-            platform_name = str(event.get_platform_name() or "")
-        md_mode = platform_name == "qq_official"
-        lines = ["📎 以上解答的文档直达章节:"]
-        for i, entry in enumerate(new_entries, 1):
-            url = self._wiki_block_url(entry)
-            if md_mode:
-                safe_title = entry.raw_title.replace("[", "［").replace("]", "］")
-                lines.append(f"{i}. [{safe_title}]({url})")
-            else:
-                lines.append(f"{i}、【{entry.raw_title}】👉 {url}")
-        direct = DirectAnswer(
-            text="\n".join(lines), image_paths=[], entry_id=new_entries[0].id
+        self._log_decision(
+            stage="linkable",
+            action="links_sent",
+            query=question,
+            results=[],
+            extra={
+                "n_sent": len(new_entries),
+                "n_candidates": len(candidates),
+                "titles": [e.raw_title for e in new_entries],
+            },
         )
-        await self._send_direct(event, direct)
+        await self._send_direct(event, self._format_links(event, new_entries))
         event.set_extra("_faq_links_sent", sent)
 
     @filter.on_llm_request()
@@ -512,6 +1184,72 @@ class FeishuQaPlugin(Star):
         ]
         yield event.plain_result("\n".join(lines))
 
+    @filter.command("jev_probe", alias={"jev诊断"})
+    async def jev_probe(self, event: AstrMessageEvent):
+        """[管理] 用 Jev 干跑一次判定,打印候选概率与最终决策。不发群、不阻断。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可用")
+            return
+        if self._jev is None:
+            yield event.plain_result(
+                "Jev 未启用。检查配置 JEV_ENABLED 与 JEV_API_KEY。"
+            )
+            return
+        question = self._strip_command(event.message_str, "jev_probe", "jev诊断")
+        if not question.strip():
+            yield event.plain_result("用法:/jev_probe <你的问题>")
+            return
+
+        router = self._router
+        if router is None:
+            yield event.plain_result("语料尚未就绪,请先 /qa_sync")
+            return
+        # 诊断命令**不受群白名单约束**:私聊(C2C)下 get_group_id() 为 None,
+        # 走 router 会被判 denied,管理员反而在自己的私聊里看不到诊断结果。
+        # 这里直接用检索器取候选,只为拿概率,不做任何投递。
+        results = self._retriever.search(question, top_k=_JEV_MAX_CANDIDATES)
+        entries = [r.entry for r in results]
+        cands = self._jev_candidates(entries, limit=_JEV_MAX_CANDIDATES)
+        result = self._jev_ask(question, cands)
+        local_kind = f"local_top1_score={results[0].score:.2f}" if results else "no_hit"
+
+        ans_t = float(self._cfg("JEV_ANSWERABLE", 0.50))
+        take_t = float(self._cfg("JEV_TAKEOVER_PROBABILITY", 0.35))
+        link_t = float(self._cfg("JEV_LINK_PROBABILITY", 0.45))
+        lines = [
+            f"问题: {question}",
+            f"本地检索: {local_kind}",
+            f"阈值: answerable>={ans_t}  takeover>={take_t}  link>={link_t}",
+        ]
+        if result is None or not result.ok:
+            reason = result.error if result is not None else "no_candidates"
+            lines.append(f"Jev: **不可用** ({reason}) → 会回落到本地判定")
+            yield event.plain_result("\n".join(lines))
+            return
+
+        answerable = result.noul(ANY_QID)
+        gate = "✅过门槛" if answerable >= ans_t else "❌未过门槛"
+        lines.append(f"answerable = {answerable:.3f} {gate}")
+        choice = result.choice(RANK_QID)
+        for i, entry in enumerate(entries):
+            key = option_key(i)
+            p = choice.probabilities.get(key) if choice else None
+            mark = " ←选中" if choice and choice.choice == key else ""
+            p_txt = f"{p:.3f}" if p is not None else "缺失"
+            lines.append(f"  [{i}] P={p_txt}{mark}  {normalize_title(entry.raw_title)[:34]}")
+        if choice is not None and choice.confidence is not None:
+            lines.append(f"choice confidence = {choice.confidence:.3f}")
+        decision = decide_takeover(
+            cands,
+            result,
+            answerable_threshold=ans_t,
+            probability_threshold=take_t,
+        )
+        picked = f" → {list(decision.entry_ids)}" if decision.entry_ids else ""
+        lines.append(f"C 位点决策: {decision.action} ({decision.reason}){picked}")
+        lines.append(f"token 用量: {result.input_tokens} in / model {result.model}")
+        yield event.plain_result("\n".join(lines))
+
     @filter.command("qa_sync")
     async def qa_sync(self, event: AstrMessageEvent):
         """手动触发一次同步(管理员)。"""
@@ -524,6 +1262,19 @@ class FeishuQaPlugin(Star):
             yield event.plain_result(f"同步完成: {result}")
         except Exception as exc:
             yield event.plain_result(f"同步失败(旧语料继续服务): {exc}")
+
+    @filter.command("fuuumusic_sync")
+    async def fuuumusic_sync(self, event: AstrMessageEvent):
+        """手动触发 fuuumusic.com 同步(管理员)。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可用")
+            return
+        yield event.plain_result("开始同步 fuuumusic.com…")
+        try:
+            result = await self._sync_fuuumusic()
+            yield event.plain_result(f"fuuumusic 同步完成: {result}")
+        except Exception as exc:
+            yield event.plain_result(f"fuuumusic 同步失败: {exc}")
 
     @filter.command("qa_reload")
     async def qa_reload(self, event: AstrMessageEvent):

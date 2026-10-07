@@ -10,6 +10,7 @@ import pytest
 from astrbot.api.event import AstrMessageEvent  # 桩包(或真实包)
 from astrbot.api.message_components import Reply
 
+from astrbot_plugin_feishu_qa.corpus.model import normalize_title
 from astrbot_plugin_feishu_qa.learn.candidate import MAX_HISTORY_CHARS
 from astrbot_plugin_feishu_qa.main import FeishuQaPlugin
 
@@ -182,7 +183,7 @@ class TestQaSendAnswer:
             event, "get_platform_name", lambda: "qq_official", raising=False
         )
         out = run_handler(plugin.qa_send_answer(event, entry_ids=entry.id))
-        assert isinstance(out[0], str) and "直达链接" in out[0] and "勿复述" in out[0]
+        assert isinstance(out[0], str) and "勿复述" in out[0]
         assert len(event.sent) == 1
         all_text = "".join(
             c[1]
@@ -190,12 +191,15 @@ class TestQaSendAnswer:
             if isinstance(c, tuple) and c[0] == "plain"
         )
         expected = (
-            f"1. [{entry.raw_title}]"
+            f"1. [{normalize_title(entry.raw_title)}]"
             f"(https://my.feishu.cn/wiki/test#{entry.source_locator})"
         )
         assert expected in all_text
-        assert "命中 1 条肖闻的解答" in all_text
-        assert "Xiaowenn《有福同享全家桶Q&A汇总》" in all_text
+        # 四条投递路径统一格式后,头部只有这一个
+        assert "以下章节与你的问题相关:" in all_text
+        assert "来源:肖闻 Xiaowenn 的 Q&A 文档" in all_text
+        # 回归:raw_title 自带 "1、",直接拼进列表会渲染成 "1. [1、【x】](url)"
+        assert f"[{entry.raw_title}]" not in all_text
 
 
     def test_generic_platform_falls_back_to_bare_url(
@@ -207,9 +211,13 @@ class TestQaSendAnswer:
         all_text = "".join(
             c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
         )
-        assert f"【{entry.raw_title}】" in all_text
+        assert f"、{normalize_title(entry.raw_title)}👉 " in all_text
         assert f"👉 https://my.feishu.cn/wiki/test#{entry.source_locator}" in all_text
         assert "](" not in all_text, "非官方平台不得输出 markdown 字面量"
+        # 回归:裸链接分支不得把条目自身序号拼进列表,也不得给已带症状标签的
+        # 标题再套一层 【】(那会渲染成 【【tag】…】)
+        assert f"、{entry.raw_title}" not in all_text
+        assert "【【" not in all_text
 
     def test_multi_entry_merged_into_single_send(self, plugin) -> None:
         picks = [e for e in plugin._entries if e.source_locator][:2]
@@ -224,7 +232,7 @@ class TestQaSendAnswer:
         )
         for e in picks:
             assert f"test#{e.source_locator}" in all_text
-            assert e.raw_title in all_text
+            assert normalize_title(e.raw_title) in all_text
 
     def test_mixed_valid_invalid_skips_bad_ids(self, plugin) -> None:
         good = next(e for e in plugin._entries if e.source_locator)
@@ -301,8 +309,10 @@ class TestAutoFaqLinks:
         joined = "\n".join(
             c[1] for c in event.sent[0].chain if isinstance(c, tuple) and c[0] == "plain"
         )
-        assert f"[{entry.raw_title}]" \
+        assert f"[{normalize_title(entry.raw_title)}]" \
             f"(https://my.feishu.cn/wiki/test#{entry.source_locator})" in joined
+        # 回归:自动附链同样不得把条目自身序号拼进列表
+        assert f"[{entry.raw_title}]" not in joined
 
     def test_dedupes_within_same_event(self, plugin) -> None:
         entry = next(e for e in plugin._entries if e.source_locator)
@@ -759,3 +769,78 @@ class TestLearnConfirmWithPending:
         assert "没有待确认" not in text, f"ok 未命中确认分支: {text}"
         assert "已收录" in text or "写回" in text
         assert (plugin.data_root / "pending_learn.json").is_file()
+
+
+class TestCommandTextNotTreatedAsQuestion:
+    """指令路径守卫:任何 `/` 开头的文本都不得被当成提问送进判定链路。
+
+    线上实测(2026-09-27):`/jev_probe midi 键盘怎么连 cakewalk` 被 @ 之后走的是
+    `on_group_message` 而非命令处理器,探针文本里的 "midi 键盘怎么连" 被判成
+    真实提问并触发了 Jev——恰好答对是运气。原守卫只放过 /问 与 /qa。
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "/jev_probe midi 键盘怎么连", "/qa_sync", "/qa_reload",
+            "/learn", "/学习 ok", "/qa_status",
+        ],
+    )
+    def test_slash_prefixed_text_returns_without_routing(
+        self, plugin: FeishuQaPlugin, text: str
+    ) -> None:
+        event = AstrMessageEvent(message_str=text)
+        event.is_at_or_wake_command = True
+        run_handler(plugin.on_group_message(event))
+        assert event.sent == [], f"{text} 不应被当成提问投递"
+        assert event.stopped is False
+
+    def test_normal_question_still_routed(self, plugin: FeishuQaPlugin) -> None:
+        event = AstrMessageEvent(message_str="cakewalk没声音怎么办")
+        event.is_at_or_wake_command = True
+        run_handler(plugin.on_group_message(event))
+        assert len(event.sent) == 1, "普通提问仍应走直答"
+        assert event.stopped is True
+
+
+class TestQaSendAnswerDedup:
+    """会话级去重:自动附链已发过的条目,模型再点不再重发。
+
+    线上实测 2026-09-27:用户问"cakewalk 打不开了",Jev 闸门发出【打开就闪退】,
+    主 Agent 随后又调 qa_send_answer 重发同一条,用户收到两条重复的链接消息。
+    `qa_send_answer` 原先从不检查 `_faq_links_sent`——那是自动附链专用的。
+    """
+
+    def test_skips_entry_already_sent_by_auto_links(self, plugin: FeishuQaPlugin) -> None:
+        entry = next(e for e in plugin._entries if e.source_locator)
+        event = AstrMessageEvent(message_str="cakewalk打不开了")
+        event.set_extra("_faq_links_sent", {entry.id})
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=entry.id))
+        assert "未重复投递" in out[0]
+        assert event.sent == [], "已发过的条目不得重复投递"
+
+    def test_still_sends_fresh_entries(self, plugin: FeishuQaPlugin) -> None:
+        picks = [e for e in plugin._entries if e.source_locator][:2]
+        event = AstrMessageEvent(message_str="问题")
+        event.set_extra("_faq_links_sent", {picks[0].id})
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=",".join(p.id for p in picks)))
+        assert "已投递1条" in out[0], "只应投递未发过的那条"
+        assert len(event.sent) == 1
+        text = "".join(
+            c.text for c in event.sent[0].chain[0].content if c.type == "Plain"
+        )
+        assert picks[1].source_locator in text
+        assert picks[0].source_locator not in text
+
+    def test_unknown_code_still_rejected(self, plugin: FeishuQaPlugin) -> None:
+        event = AstrMessageEvent(message_str="x")
+        out = run_handler(plugin.qa_send_answer(event, entry_ids="zzzzz"))
+        assert "没有可投递" in out[0]
+        assert event.sent == []
+
+    def test_no_prior_sends_unchanged(self, plugin: FeishuQaPlugin) -> None:
+        picks = [e for e in plugin._entries if e.source_locator][:2]
+        event = AstrMessageEvent(message_str="问题")
+        out = run_handler(plugin.qa_send_answer(event, entry_ids=",".join(p.id for p in picks)))
+        assert "已投递2条" in out[0]
+        assert len(event.sent) == 1

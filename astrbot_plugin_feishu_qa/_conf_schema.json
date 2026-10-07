@@ -46,6 +46,89 @@
     "type": "float",
     "default": 3.0
   },
+  "TENTATIVE_ANSWER_ENABLED": {
+    "description": "模糊档:命中中置信区时是否投递「可能相关」章节指引",
+    "type": "bool",
+    "hint": "默认关闭(仍交主 Agent)。关闭期间决策日志仍会记录 tentative_disabled 及本应发出的候选,一周后据此判断再开启",
+    "default": false
+  },
+  "DECISION_LOG_ENABLED": {
+    "description": "记录路由决策日志(阈值调参的唯一依据)",
+    "type": "bool",
+    "hint": "写入 data/plugin_data/astrbot_plugin_feishu_qa/decisions.jsonl,自动轮转",
+    "default": true
+  },
+  "DECISION_LOG_TEXT_MODE": {
+    "description": "决策日志的问题原文留存方式",
+    "type": "string",
+    "hint": "truncate=截断 200 字(默认);hash=只留哈希不留原文(长期留存推荐);full=全文(仅临时复盘用)",
+    "default": "truncate"
+  },
+  "DECISION_LOG_MAX_TEXT_CHARS": {
+    "description": "决策日志问题原文截断长度",
+    "type": "int",
+    "default": 200
+  },
+  "DECISION_CACHE_TTL_MINUTES": {
+    "description": "同一问题的判定记忆时长(分钟)",
+    "type": "int",
+    "hint": "期间重复问同一问题直接复用首次结果,杜绝同一句问两次答案不同;语料重新同步后自动作废",
+    "default": 240
+  },
+  "JEV_ENABLED": {
+    "description": "启用 Jev 决策模型接管路由判定",
+    "type": "bool",
+    "hint": "关闭或未配 JEV_API_KEY 时,两个接管点完全走本地判定,行为与 v0.9.0 一致",
+    "default": false
+  },
+  "JEV_API_KEY": {
+    "description": "TypeSafe Jev API Key",
+    "type": "string",
+    "hint": "console.typesafe.ai 自助申请;仅存于实例配置,不会写入决策日志",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "JEV_SELFTEST_ON_LOAD": {
+    "description": "插件加载时自检一次 Jev 连通性并写日志",
+    "type": "bool",
+    "hint": "改完 API Key 后无需等第一条真实提问即可确认可用;失败只告警,不影响机器人",
+    "default": true
+  },
+  "JEV_MODEL": {
+    "description": "Jev 模型版本",
+    "type": "string",
+    "hint": "留空用 jev-latest;调阈值前建议钉死具体版本,别名会随发布漂移",
+    "default": ""
+  },
+  "JEV_ENDPOINT": {
+    "description": "Jev 接口地址",
+    "type": "string",
+    "default": ""
+  },
+  "JEV_TIMEOUT_SECONDS": {
+    "description": "Jev 调用超时(秒)",
+    "type": "float",
+    "hint": "超时/报错一律静默回落到本地判定,不会挂住应答链路",
+    "default": 5.0
+  },
+  "JEV_ANSWERABLE": {
+    "description": "Jev Noul:这堆材料答不答得上用户这个问题(绝对门槛,两处共用)",
+    "type": "float",
+    "hint": "实测(2026-09-26,本语料):闲聊最高 0.19、真问最低 0.45,该门槛对「是否本领域」的判别稳定",
+    "default": 0.50
+  },
+  "JEV_TAKEOVER_PROBABILITY": {
+    "description": "C 位点:Choice 概率门槛(最对的那条要够高才自己答)",
+    "type": "float",
+    "hint": "刻意偏低——误判「有把握」的代价只是回一句模糊指引,误判「没把握」是该答的问题静默",
+    "default": 0.35
+  },
+  "JEV_LINK_PROBABILITY": {
+    "description": "D 位点:Choice 概率门槛(章节够格才附链接)",
+    "type": "float",
+    "hint": "刻意高于 C——附链是对用户的承诺,发错章节的代价是信任(2026-09-15 事故形态)",
+    "default": 0.45
+  },
   "LEARN_CONTEXT_MESSAGES": {
     "description": "/learn 分析的最近消息条数上限",
     "type": "int",
@@ -56,5 +139,26 @@
     "type": "string",
     "hint": "强烈建议填一份生产 Q&A 文档的副本,验证无误后再人工切换",
     "default": ""
+  },
+  "FUUUMUSIC_ENABLED": {
+    "description": "启用 fuuumusic.com 中文资料作为额外语料源",
+    "type": "bool",
+    "hint": "关闭后不再抓取 fuuumusic,已有数据保留但不再更新",
+    "default": true
+  },
+  "FUUUMUSIC_SECTIONS": {
+    "description": "fuuumusic 目录标记(键值对:目录名 → 是否标记)",
+    "type": "dict",
+    "hint": "键为目录名,值为 true/false;仅作为标记,不影响实际导入行为(永远导入所有非首页页面)",
+    "default": {
+      "cakewalk-sonar-faq": false,
+      "cakewalk-sonar-help": false
+    }
+  },
+  "FUUUMUSIC_SYNC_INTERVAL_HOURS": {
+    "description": "fuuumusic 自动同步间隔(小时)",
+    "type": "int",
+    "hint": "0 = 关闭自动同步;fuuumusic 更新频率较低,建议 24 小时",
+    "default": 24
   }
 }
