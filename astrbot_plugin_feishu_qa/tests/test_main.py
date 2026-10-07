@@ -516,6 +516,53 @@ class TestSyncWithFakeGateway:
         )
         return plugin
 
+    def test_sync_reports_corpus_level_diff_and_keeps_other_source(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """飞书同步的差异必须按**合并视图**算,不得把网页来源报成 removed。
+
+        线上实测把另一来源的 76 条全报成 removed,极易误读成"语料被删了"。
+        """
+        from test_adapter import FakeGateway
+
+        from astrbot_plugin_feishu_qa.corpus.builder import build_manifest
+        from astrbot_plugin_feishu_qa.corpus.model import QaEntry
+        from astrbot_plugin_feishu_qa.corpus.parser import ParseResult
+
+        xml = (FIXTURES / "qa_r8268.xml").read_text()
+        gw = FakeGateway(fetch_results={"https://my.feishu.cn/wiki/test": xml})
+        plugin = self._plugin(tmp_path, monkeypatch, gw)
+
+        fuu = QaEntry(
+            id="qa_fuuu0000000001",
+            section_path=["二、其他音源相关问答汇总"],
+            category="二、其他音源相关问答汇总",
+            symptom_tags=[],
+            title="网页条目",
+            raw_title="网页条目",
+            body="正文",
+            source_locator="https://www.fuuumusic.com/cakewalk-sonar-faq/all#q38",
+            source="fuuumusic",
+        )
+        plugin.store.save_slice(
+            "fuuumusic",
+            build_manifest(
+                ParseResult(entries=[fuu]),
+                revision_id=1,
+                document_id="fuuumusic_qa",
+                source="fuuumusic",
+            ),
+        )
+        plugin._commit_merged()
+
+        result = asyncio.run(plugin.sync_once())
+
+        assert result["status"] == "synced"
+        assert result["removed"] == 0, "另一来源不得被报成 removed"
+        assert result["sources"]["fuuumusic"] == 1
+        assert result["corpus_entries"] == result["added"] + 1
+        assert any(e.id == fuu.id for e in plugin._entries)
+
     def test_sync_once_full_pipeline(self, tmp_path: Path, monkeypatch) -> None:
         from test_adapter import FakeGateway
 

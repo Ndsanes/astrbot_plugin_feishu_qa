@@ -723,7 +723,10 @@ class FeishuQaPlugin(Star):
             source=SOURCE_FEISHU,
         )
         old = self.store.load()
-        diff = diff_manifests(old, manifest)
+        # 差异一律按**合并视图**比较(旧合并 vs 新合并,见下方 commit 之后):
+        # 飞书同步只替换自己那片分片,若拿"自己的分片"与"整份合并快照"相减,
+        # 会把另一个来源的全部条目报成 removed(线上实测 removed=76,极易误读
+        # 成"语料被删了")。
 
         # 章节定位(块 ID)会随文档结构编辑整体重生:即使正文一字未改,
         # 也可能全部换新。快照必须无条件刷新,否则章节直达链接静默失效
@@ -755,7 +758,8 @@ class FeishuQaPlugin(Star):
 
         # 飞书只写自己的分片;合并快照由全部分片重算(网页那份不会被抹掉)。
         self.store.save_slice(SOURCE_FEISHU, manifest)
-        self._commit_merged()
+        merged = self._commit_merged()
+        diff = diff_manifests(old, merged)
         if relinked:
             samples = ";".join(
                 f"{e['id']}:{old_locs.get(e['id'], '?')}→{e['source_locator']}"
@@ -777,6 +781,8 @@ class FeishuQaPlugin(Star):
             "added": diff["added"],
             "updated": diff["updated"],
             "removed": diff["removed"],
+            "corpus_entries": merged["entry_count"],
+            "sources": {k: v["kept"] for k, v in merged.get("sources", {}).items()},
             "image_failures": failures,
             "relinked": len(relinked),
         }
