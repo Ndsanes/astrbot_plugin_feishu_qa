@@ -844,3 +844,94 @@ class TestQaSendAnswerDedup:
         out = run_handler(plugin.qa_send_answer(event, entry_ids=",".join(p.id for p in picks)))
         assert "已投递2条" in out[0]
         assert len(event.sent) == 1
+
+
+class TestMultiSourceCorpus:
+    """fuuumusic 接入后的多来源行为。
+
+    两个来源共用一个快照,于是**直达链接与署名必须按来源区分**:网页条目的
+    定位符是可点 URL,飞书条目是块锚点。2026-10-07 事故里网页条目的链接被
+    拼成 ``<wiki>#https://www.fuuumusic.com/...#q38`` 这种废链。
+    """
+
+    @staticmethod
+    def _fuu_entry(plugin: FeishuQaPlugin, anchor: str = "q38") -> object:
+        from astrbot_plugin_feishu_qa.corpus.model import QaEntry
+
+        return QaEntry(
+            id="qa_fuuu0000000001",
+            section_path=["二、其他音源相关问答汇总", "（一）Native Instruments （NI）相关"],
+            category="（一）Native Instruments （NI）相关",
+            symptom_tags=["NI安装失败"],
+            title="Native Instrument音源、插件一直安装失败怎么办？",
+            raw_title="【NI安装失败】Native Instrument音源、插件一直安装失败怎么办？",
+            body="自从inMusic收购Native Instrument之后……",
+            source_locator=f"https://www.fuuumusic.com/cakewalk-sonar-faq/all#{anchor}",
+            source="fuuumusic",
+        )
+
+    def test_fuuumusic_link_is_its_own_url(self, plugin: FeishuQaPlugin) -> None:
+        assert (
+            plugin._wiki_block_url(self._fuu_entry(plugin))
+            == "https://www.fuuumusic.com/cakewalk-sonar-faq/all#q38"
+        )
+
+    def test_feishu_link_still_uses_anchor(self, plugin: FeishuQaPlugin) -> None:
+        entry = next(e for e in plugin._entries if e.source_locator)
+        assert plugin._wiki_block_url(entry) == f"https://my.feishu.cn/wiki/test#{entry.source_locator}"
+
+    def test_attribution_follows_source(self, plugin: FeishuQaPlugin) -> None:
+        from astrbot_plugin_feishu_qa.answer.direct import (
+            SOURCE_ATTRIBUTION,
+            SOURCE_ATTRIBUTION_FUUUMUSIC,
+            SOURCE_ATTRIBUTION_MIXED,
+        )
+
+        fuu = self._fuu_entry(plugin)
+        feishu = next(e for e in plugin._entries if e.source_locator)
+        assert plugin._attribution_for([fuu]) == SOURCE_ATTRIBUTION_FUUUMUSIC
+        assert plugin._attribution_for([feishu]) == SOURCE_ATTRIBUTION
+        assert plugin._attribution_for([fuu, feishu]) == SOURCE_ATTRIBUTION_MIXED
+
+    def test_rendered_message_carries_source_url_and_attribution(
+        self, plugin: FeishuQaPlugin
+    ) -> None:
+        event = SimpleNamespace(get_platform_name=lambda: "qq_official")
+        answer = plugin._format_links(event, [self._fuu_entry(plugin)])
+        assert "https://www.fuuumusic.com/cakewalk-sonar-faq/all#q38" in answer.text
+        assert "fuuumusic.com" in answer.text.split("来源")[-1]
+
+    def test_both_sources_survive_independent_syncs(self, plugin: FeishuQaPlugin) -> None:
+        """回归:任一方同步后,另一方条目必须仍在检索语料里。"""
+        from astrbot_plugin_feishu_qa.corpus.builder import build_manifest
+        from astrbot_plugin_feishu_qa.corpus.parser import ParseResult, parse_xml
+
+        xml = (FIXTURES / "qa_r8268.xml").read_text()
+        feishu_manifest = build_manifest(
+            parse_xml(xml, source_revision=8268),
+            revision_id=8268,
+            document_id="doc",
+            source="feishu",
+        )
+        plugin.store.save_slice("feishu", feishu_manifest)
+
+        fuu = self._fuu_entry(plugin)
+        fuu_manifest = build_manifest(
+            ParseResult(entries=[fuu]),
+            revision_id=999,
+            document_id="fuuumusic_qa",
+            source="fuuumusic",
+        )
+        plugin.store.save_slice("fuuumusic", fuu_manifest)
+
+        merged = plugin._commit_merged()
+        assert {e["source"] for e in merged["entries"]} == {"feishu", "fuuumusic"}
+        assert plugin._load_corpus() is True
+        ids = {e.id for e in plugin._entries}
+        assert fuu.id in ids
+        assert any(e.source == "feishu" for e in plugin._entries)
+
+        # 飞书再同步一次:网页条目不得消失
+        plugin.store.save_slice("feishu", feishu_manifest)
+        merged2 = plugin._commit_merged()
+        assert any(e["id"] == fuu.id for e in merged2["entries"])

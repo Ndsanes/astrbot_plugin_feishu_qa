@@ -34,8 +34,12 @@ class QaEntry:
     raw_title: str  # 原样标题
     body: str
     images: list[QaImage] = field(default_factory=list)
-    source_locator: str = ""  # 飞书块 ID 等
+    source_locator: str = ""  # 飞书块 ID / 网页锚点 URL
     source_revision: int = -1
+    # 语料来源标识("feishu" / "fuuumusic")。多来源共用一个快照后,**直达链接
+    # 与署名必须按来源区分**(飞书用块锚点、网页用其自身 URL 锚点),故身份之外
+    # 还需记住来处。空串 = 迁移前的历史快照,按飞书处理。
+    source: str = ""
     content_hash: str = ""
 
     def compute_content_hash(self) -> str:

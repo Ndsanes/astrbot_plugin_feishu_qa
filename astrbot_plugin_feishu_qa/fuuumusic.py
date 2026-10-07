@@ -1,11 +1,22 @@
-#!/usr/bin/env python3
-"""从 fuuumusic.com 抓取 Cakewalk Sonar 中文资料并导入语料。
+"""fuuumusic.com(小闻的奇妙屋)Cakewalk Sonar 中文语料接入。
 
-用法:
-    python -m astrbot_plugin_feishu_qa.fuuumusic --data-root <dir>           # 抓取并构建快照
-    python -m astrbot_plugin_feishu_qa.fuuumusic --check-idempotent          # 抓取两次比对 hash
+数据来源是站点自带的**问答聚合页** ``/cakewalk-sonar-faq/all``:该页把全部
+问答渲染成 ``<details class="qa-item" id="qN" data-qtitle="【症状标签】问题？">``,
+外层 ``<h2>``/``<h3>`` 分组,答案在 ``<div class="qa-a">`` 内(含 ``<figure><img>``)。
+实测该页共 100 条 = 47 条 FAQ + 53 篇官方文档翻译,与站点 ``llms.txt`` 声明一致,
+故它才是机器可读的规范入口;各条目的独立页面是该页的子集。
 
-退出码:0 成功;1 抓取或构建失败。
+**2026-10-07 修正(线上事故)**:此前实现把整页当成**一条**条目导入,该条标题
+里不含任何具体症状词,于是检索的"主题词支撑闸门"(``retrieval/scorer.py`` 的
+``DISCRIMINATIVE_MIN_IDF``/``UNSUPPORTED_PENALTY``)判定它只是共享了领域高频词,
+分数被压到 0.3 倍——用户按标题原话提问(仅改了表述)也匹配不到,只能交回主 Agent。
+现在按站点自身的 ``details`` 结构拆成逐条条目,并复用飞书解析器的字段形态
+(``section_path``/``category``/症状标签/``raw_title``/图片/``source_locator``),
+使检索、置信闸门、Jev 判定、链接渲染全部无需改动即可工作。
+
+**网络必须不阻塞事件循环**:插件零第三方依赖,没有 aiohttp,同步 ``urllib``
+直接跑在事件循环里会把整台机器人卡住(实测每次同步停顿约 30 秒,期间普通
+消息回复一起变慢)。所有抓取一律经 ``asyncio.to_thread`` 走线程。
 """
 
 from __future__ import annotations
@@ -13,366 +24,428 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import logging
 import re
-import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
+from urllib.request import Request, urlopen
 
-from .corpus.builder import build_manifest, diff_manifests, manifest_content_hash
+from .corpus.builder import build_manifest, manifest_content_hash, merge_manifests
 from .corpus.model import QaEntry, QaImage, derive_entry_id, extract_symptom_tags
+from .corpus.parser import ParseResult
 from .storage.snapshot import SnapshotStore
 
-FUUU_BASE = "https://www.fuuumusic.com"
-SITEMAP_URL = f"{FUUU_BASE}/sitemap.xml"
+logger = logging.getLogger("feishu_qa.fuuumusic")
 
-# 只抓取 FAQ 和 help 页面（排除首页、merch、freebies 等）
-FAQ_PATH_RE = re.compile(r"^/cakewalk-sonar-faq(/.*)?$")
-HELP_PATH_RE = re.compile(r"^/cakewalk-sonar-help(/.*)?$")
+FUUU_BASE = "https://www.fuuumusic.com"
+QA_PAGE_URL = f"{FUUU_BASE}/cakewalk-sonar-faq/all"
+SOURCE_NAME = "fuuumusic"
+SOURCE_FEISHU = "feishu"
+
+# 站点把问答截图统一放在这个前缀下;logo/装饰图不在其中。
+QA_IMAGE_PREFIX = "/assets/img/qa/"
+
+_USER_AGENT = "Mozilla/5.0 (compatible; astrbot-plugin-feishu-qa)"
+DEFAULT_TIMEOUT = 20.0
+
+_VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+}
+# 整棵子树都不承载问答内容(导航/页脚/脚本)。button 是站点的交互控件
+# (如"展开全部"),其文本也不属于条目正文。
+_SKIP_TAGS = {"script", "style", "nav", "footer", "header", "button"}
+
+_HEADING_TAGS = ("h2", "h3")
+
+
+# ── 网络(一律走线程,绝不阻塞事件循环) ──
+
+
+def _fetch_bytes_sync(url: str, timeout: float) -> bytes:
+    req = Request(url, headers={"User-Agent": _USER_AGENT})
+    with urlopen(req, timeout=timeout) as resp:  # noqa: S310 - 站点固定为 https
+        return resp.read()
+
+
+async def fetch_bytes(url: str, *, timeout: float = DEFAULT_TIMEOUT) -> bytes | None:
+    """抓取原始字节;失败返回 None(调用方决定降级方式)。"""
+    try:
+        return await asyncio.to_thread(_fetch_bytes_sync, url, timeout)
+    except Exception as exc:
+        logger.debug("[fuuumusic] 抓取失败 %s: %s", url, exc)
+        return None
+
+
+async def fetch_url(url: str, *, timeout: float = DEFAULT_TIMEOUT) -> str | None:
+    """抓取文本;失败返回 None。"""
+    raw = await fetch_bytes(url, timeout=timeout)
+    if raw is None:
+        return None
+    return raw.decode("utf-8", errors="replace")
+
+
+# ── 解析 ──
 
 
 @dataclass
-class FuuumusicPage:
-    """抓取到的单个页面。"""
+class QaItem:
+    """聚合页里的一条问答(尚未成型为 QaEntry)。"""
 
-    url: str
-    title: str
+    anchor: str
+    raw_title: str
     body: str
-    images: list[str] = field(default_factory=list)  # 图片 URL 列表
+    images: list[str]
+    section_path: list[str]
 
 
-class FuuumusicHTMLParser(HTMLParser):
-    """解析 fuuumusic 页面 HTML，提取标题、正文和图片。"""
+class QaDocumentParser(HTMLParser):
+    """解析问答聚合页的一条条 ``<details class="qa-item">``。
+
+    只用实现方自己的语义标记(class/id/data-qtitle)定位,**不猜正文结构**:
+    条目边界、标题原文、章节归属全部来自站点标注,因此条目数与锚点天然稳定。
+    """
 
     def __init__(self) -> None:
-        super().__init__()
-        self.title = ""
-        self.body_parts: list[str] = []
-        self.images: list[str] = []
-        self._in_title = False
-        self._in_h1 = False
-        self._in_p = False
-        self._in_li = False
-        self._current_text: list[str] = []
-        self._skip_depth = 0  # 跳过 script/style 等
+        super().__init__(convert_charrefs=True)
+        self._depth = 0
+        self._skip_at: int | None = None
+        self._h2 = ""
+        self._h3 = ""
+        self._heading: str | None = None
+        self._heading_buf: list[str] = []
+        self._item_at: int | None = None
+        self._item: dict | None = None
+        self._in_summary = False
+        self._summary_span = ""
+        self._summary_tag_buf: list[str] = []
+        self._summary_rest_buf: list[str] = []
+        self._block_open = False
+        self._block_buf: list[str] = []
+        self.items: list[QaItem] = []
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag in ("script", "style", "nav", "footer", "header"):
-            self._skip_depth += 1
+    # ── 标签事件 ──
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attr = {k: (v or "") for k, v in attrs}
+        if self._skip_at is not None:
+            if tag not in _VOID_TAGS:
+                self._depth += 1
             return
-        if self._skip_depth:
+        if tag in _SKIP_TAGS:
+            self._skip_at = self._depth
+            self._depth += 1
             return
-        if tag == "title":
-            self._in_title = True
-        elif tag == "h1":
-            self._in_h1 = True
-        elif tag == "p":
-            self._in_p = True
-            self._current_text = []
-        elif tag == "li":
-            self._in_li = True
-            self._current_text = []
-        elif tag == "img":
-            src = dict(attrs).get("src", "")
-            if src and src.startswith("/assets/img/qa/"):
-                self.images.append(urljoin(FUUU_BASE, src))
+
+        if tag in _HEADING_TAGS and self._item is None:
+            self._heading = tag
+            self._heading_buf = []
+        elif tag == "details" and "qa-item" in attr.get("class", ""):
+            self._item_at = self._depth
+            self._item = {
+                "anchor": attr.get("id", ""),
+                "qtitle": attr.get("data-qtitle", ""),
+                "h2": self._h2,
+                "h3": self._h3,
+                "body": [],
+                "images": [],
+            }
+            self._summary_tag_buf = []
+            self._summary_rest_buf = []
+        elif self._item is not None:
+            if tag == "summary":
+                self._in_summary = True
+                self._summary_tag_buf = []
+                self._summary_rest_buf = []
+            elif tag == "img":
+                src = attr.get("src", "")
+                if src.startswith(QA_IMAGE_PREFIX):
+                    self._item["images"].append(urljoin(FUUU_BASE, src))
+            elif tag in ("p", "li", "figcaption"):
+                self._block_open = True
+                self._block_buf = []
+            elif tag == "span" and self._in_summary:
+                cls = attr.get("class", "")
+                if "qa-num" in cls:
+                    self._summary_span = "num"
+                elif "qa-tag" in cls:
+                    self._summary_span = "tag"
+
+        if tag not in _VOID_TAGS:
+            self._depth += 1
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in ("script", "style", "nav", "footer", "header"):
-            if self._skip_depth:
-                self._skip_depth -= 1
+        if tag not in _VOID_TAGS:
+            self._depth -= 1
+            if self._skip_at is not None:
+                if self._depth <= self._skip_at:
+                    self._skip_at = None
+                return
+        if self._skip_at is not None:
             return
-        if self._skip_depth:
-            return
-        if tag == "title":
-            self._in_title = False
-        elif tag == "h1":
-            self._in_h1 = False
-        elif tag == "p":
-            self._in_p = False
-            text = "".join(self._current_text).strip()
-            if text:
-                self.body_parts.append(text)
-            self._current_text = []
-        elif tag == "li":
-            self._in_li = False
-            text = "".join(self._current_text).strip()
-            if text:
-                self.body_parts.append(f"• {text}")
-            self._current_text = []
+
+        if self._heading == tag:
+            text = _squash("".join(self._heading_buf))
+            if tag == "h2":
+                self._h2, self._h3 = text, ""
+            else:
+                self._h3 = text
+            self._heading = None
+        elif tag == "span" and self._in_summary:
+            self._summary_span = ""
+        elif tag == "summary":
+            self._in_summary = False
+            self._summary_span = ""
+        elif tag in ("p", "li", "figcaption") and self._block_open:
+            self._flush_block()
+        elif tag == "details" and self._item is not None and self._item_at == self._depth:
+            self._finish_item()
 
     def handle_data(self, data: str) -> None:
-        if self._skip_depth:
+        if self._skip_at is not None:
             return
-        if self._in_title:
-            self.title += data
-        elif self._in_h1:
-            pass  # h1 标题单独处理
-        elif self._in_p or self._in_li:
-            self._current_text.append(data)
+        if self._heading is not None:
+            self._heading_buf.append(data)
+        elif self._in_summary:
+            if self._summary_span == "num":
+                return  # 站点自己的编号,不是标题的一部分
+            if self._summary_span == "tag":
+                self._summary_tag_buf.append(data)
+            else:
+                self._summary_rest_buf.append(data)
+        elif self._item is not None and self._block_open:
+            self._block_buf.append(data)
 
-    def get_result(self) -> tuple[str, str, list[str]]:
-        title = self.title.strip()
-        # 去掉标题中的站点后缀
-        title = re.sub(r"\s*[|｜]\s*Cakewalk Sonar FAQ\s*[|｜]\s*小闻的奇妙屋\s*$", "", title)
-        title = re.sub(r"\s*[|｜]\s*小闻的奇妙屋\s*$", "", title)
-        body = "\n\n".join(self.body_parts)
-        # 去重图片
-        seen: set[str] = set()
-        unique_images: list[str] = []
-        for img in self.images:
-            if img not in seen:
-                seen.add(img)
-                unique_images.append(img)
-        return title, body, unique_images
+    # ── 落定 ──
 
+    def _flush_block(self) -> None:
+        text = _squash("".join(self._block_buf))
+        self._block_open = False
+        self._block_buf = []
+        if text and self._item is not None:
+            self._item["body"].append(text)
 
-def discover_sections(xml_content: str) -> list[str]:
-    """从 sitemap.xml 自动发现所有顶级目录。
-
-    返回按字母排序的目录名列表，如 ["cakewalk-sonar", "cakewalk-sonar-faq", ...]。
-    排除首页（/）。
-    """
-    root = ET.fromstring(xml_content)
-    ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-    sections: set[str] = set()
-    for url_elem in root.findall(".//sm:url", ns):
-        loc = url_elem.find("sm:loc", ns)
-        if loc is None or not loc.text:
-            continue
-        path = urlparse(loc.text.strip()).path
-        if path == "/" or not path:
-            continue
-        # 提取顶级目录名
-        parts = path.strip("/").split("/")
-        if parts and parts[0]:
-            sections.add(parts[0])
-    return sorted(sections)
-
-
-def parse_sitemap(xml_content: str) -> list[str]:
-    """解析 sitemap.xml，返回所有非首页页面的 URL。"""
-    root = ET.fromstring(xml_content)
-    ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-    urls: list[str] = []
-    for url_elem in root.findall(".//sm:url", ns):
-        loc = url_elem.find("sm:loc", ns)
-        if loc is None or not loc.text:
-            continue
-        url = loc.text.strip()
-        path = urlparse(url).path
-        if path != "/" and path != "":
-            urls.append(url)
-    return urls
-
-
-async def fetch_url(url: str, *, timeout: float = 10.0) -> str | None:
-    """异步抓取 URL 内容，返回文本或 None。"""
-    try:
-        import aiohttp
-    except ImportError:
-        # 降级到同步 urllib
-        return _fetch_url_sync(url, timeout=timeout)
-    try:
-        async with (
-            aiohttp.ClientSession() as session,
-            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
-        ):
-            if resp.status != 200:
-                return None
-            return await resp.text()
-    except Exception:
-        return None
-
-
-def _fetch_url_sync(url: str, *, timeout: float = 10.0) -> str | None:
-    """同步抓取 URL（aiohttp 不可用时降级）。"""
-    import urllib.request
-
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="replace")
-    except Exception:
-        return None
-
-
-async def fetch_all_pages(urls: list[str]) -> list[FuuumusicPage]:
-    """并发抓取所有页面。"""
-    semaphore = asyncio.Semaphore(5)  # 限制并发
-
-    async def fetch_one(url: str) -> FuuumusicPage | None:
-        async with semaphore:
-            html = await fetch_url(url)
-            if html is None:
-                return None
-            parser = FuuumusicHTMLParser()
-            parser.feed(html)
-            title, body, images = parser.get_result()
-            if not title or not body:
-                return None
-            return FuuumusicPage(url=url, title=title, body=body, images=images)
-
-    tasks = [fetch_one(url) for url in urls]
-    results = await asyncio.gather(*tasks)
-    return [r for r in results if r is not None]
-
-
-def page_to_entry(page: FuuumusicPage, *, revision_id: int) -> QaEntry:
-    """把抓取到的页面转成 QaEntry。"""
-    # 从 URL 提取分类
-    path = urlparse(page.url).path
-    if "/cakewalk-sonar-faq/" in path:
-        section = "fuuumusic FAQ"
-    elif "/cakewalk-sonar-help/" in path:
-        section = "fuuumusic 帮助文档"
-    else:
-        section = "fuuumusic"
-
-    # 提取症状标签
-    tags, stripped_title = extract_symptom_tags(page.title)
-
-    # 构建 section_path
-    section_path = [section]
-
-    # 派生 ID
-    entry_id = derive_entry_id(section_path, page.title, source_locator=page.url)
-
-    # 构建图片
-    images: list[QaImage] = []
-    for img_url in page.images:
-        img_hash = hashlib.sha256(img_url.encode()).hexdigest()[:16]
-        images.append(
-            QaImage(
-                image_id=img_hash,
-                file_token=img_url,  # 用 URL 作为 token
-                name=Path(urlparse(img_url).path).name,
-                local_path=f"images/fuuumusic_{img_hash}.webp",
+    def _finish_item(self) -> None:
+        item = self._item
+        self._item = None
+        self._item_at = None
+        if not item:
+            return
+        raw_title = item["qtitle"] or self._summary_title()
+        if not raw_title:
+            return
+        section_path = [p for p in (item["h2"], item["h3"]) if p]
+        self.items.append(
+            QaItem(
+                anchor=item["anchor"],
+                raw_title=raw_title,
+                body="\n\n".join(item["body"]),
+                images=list(dict.fromkeys(item["images"])),  # 去重保序
+                section_path=section_path,
             )
         )
 
-    return QaEntry(
-        id=entry_id,
-        section_path=section_path,
-        category=section,
-        symptom_tags=tags,
-        title=stripped_title,
-        raw_title=page.title,
-        body=page.body,
-        images=images,
-        source_locator=page.url,
-        source_revision=revision_id,
+    def _summary_title(self) -> str:
+        """data-qtitle 缺失时用 summary 文本重建:标签加回【】,编号丢弃。"""
+        tag = _squash("".join(self._summary_tag_buf))
+        rest = _squash("".join(self._summary_rest_buf))
+        if tag and not rest.startswith(tag):
+            return f"【{tag}】{rest}"
+        return rest
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _to_image(url: str) -> QaImage:
+    """网页图片 → QaImage(本地路径由 build_manifest 按文件名回填)。"""
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    name = Path(urlparse(url).path).name or f"{digest}.webp"
+    return QaImage(image_id=digest, file_token=url, name=name, local_path="")
+
+
+def parse_qa_document(
+    html: str,
+    *,
+    page_url: str = QA_PAGE_URL,
+    revision_id: int = -1,
+    sections: list[str] | None = None,
+) -> list[QaEntry]:
+    """问答聚合页 → QaEntry 列表。
+
+    ``sections`` 为章节名白名单(对应页面 ``<h2>`` 文本);空/None = 不过滤。
+    条目 ID 与飞书解析器同源(章节首段 + 去标签标题),故网页里那份与飞书
+    重复的 FAQ 会派生出**相同 ID**,交由 ``merge_manifests`` 去重。
+    """
+    parser = QaDocumentParser()
+    parser.feed(html)
+    parser.close()
+
+    wanted = {_squash(s) for s in sections} if sections else None
+
+    entries: list[QaEntry] = []
+    for item in parser.items:
+        top = item.section_path[0] if item.section_path else ""
+        if wanted is not None and _squash(top) not in wanted:
+            continue
+        tags, stripped = extract_symptom_tags(item.raw_title)
+        locator = f"{page_url}#{item.anchor}" if item.anchor else page_url
+        entries.append(
+            QaEntry(
+                id=derive_entry_id(item.section_path, stripped, locator),
+                section_path=item.section_path,
+                category=item.section_path[-1] if item.section_path else "",
+                symptom_tags=tags,
+                title=stripped,
+                raw_title=item.raw_title,
+                body=item.body,
+                images=[_to_image(u) for u in item.images],
+                source_locator=locator,
+                source_revision=revision_id,
+                source=SOURCE_NAME,
+            )
+        )
+    logger.info(
+        "[fuuumusic] 解析完成: entries=%d images=%d sections=%s",
+        len(entries),
+        sum(len(e.images) for e in entries),
+        "全部" if wanted is None else len(wanted),
     )
+    return entries
 
 
-async def download_image(url: str, target: Path) -> bool:
-    """下载单张图片到 target 路径。"""
-    try:
-        html = await fetch_url(url)
-        if html is None:
-            return False
+def discover_sections(html: str) -> list[str]:
+    """列出聚合页的全部章节名(``<h2>`` 文本,按页面顺序去重)。"""
+    parser = QaDocumentParser()
+    parser.feed(html)
+    parser.close()
+    seen: list[str] = []
+    for item in parser.items:
+        if item.section_path and item.section_path[0] not in seen:
+            seen.append(item.section_path[0])
+    return seen
+
+
+# ── 图片下载 ──
+
+
+async def download_manifest_images(
+    manifest: dict,
+    data_root: Path,
+    *,
+    concurrency: int = 8,
+) -> tuple[int, int]:
+    """下载 manifest 里缺失的图片,返回 (成功, 失败)。
+
+    必须收 manifest 而非 QaEntry:本地路径是 ``build_manifest`` 按
+    ``image_id + 扩展名`` 回填的,拿条目拿不到同一套约定。
+    已存在则短路;单张失败只计数,绝不影响语料可用性。
+    """
+    sem = asyncio.Semaphore(concurrency)
+    images_dir = Path(data_root) / "images"
+    state = {"ok": 0, "failed": 0}
+
+    async def one(img: dict) -> None:
+        target = Path(data_root) / str(img.get("local_path") or "")
+        if not img.get("local_path"):
+            state["failed"] += 1
+            return
+        if target.is_file() and target.stat().st_size > 0:
+            state["ok"] += 1
+            return
+        async with sem:
+            raw = await fetch_bytes(str(img.get("file_token") or ""))
+        if not raw:
+            state["failed"] += 1
+            return
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(html.encode("utf-8"))
-        return True
-    except Exception:
-        return False
+        tmp = target.with_name(f"{target.name}.tmp")
+        tmp.write_bytes(raw)
+        tmp.replace(target)
+        state["ok"] += 1
 
-
-async def main() -> int:
-    ap = argparse.ArgumentParser(description="从 fuuumusic.com 抓取 Cakewalk Sonar 中文资料")
-    ap.add_argument("--data-root", type=Path, default=None)
-    ap.add_argument("--check-idempotent", action="store_true")
-    args = ap.parse_args()
-
-    data_root = args.data_root or Path(__file__).resolve().parent / "data" / "feishu_qa"
-
-    # 1. 解析 sitemap
-    sitemap_xml = await fetch_url(SITEMAP_URL)
-    if sitemap_xml is None:
-        print("[ERROR] 无法获取 sitemap.xml")
-        return 1
-
-    urls = parse_sitemap(sitemap_xml)
-    print(f"[sitemap] 发现 {len(urls)} 个 FAQ/help 页面")
-
-    if not urls:
-        print("[ERROR] sitemap 中没有找到 FAQ/help 页面")
-        return 1
-
-    # 2. 抓取所有页面
-    pages = await fetch_all_pages(urls)
-    print(f"[fetch] 成功抓取 {len(pages)}/{len(urls)} 个页面")
-
-    if not pages:
-        print("[ERROR] 没有成功抓取任何页面")
-        return 1
-
-    # 3. 转换为 QaEntry
-    revision_id = int(datetime.now(UTC).timestamp())
-    entries = [page_to_entry(p, revision_id=revision_id) for p in pages]
-
-    # 4. 下载图片
-    print("[images] 开始下载图片...")
-    img_ok = 0
-    img_fail = 0
-    for entry in entries:
-        for img in entry.images:
-            target = data_root / img.local_path
-            if target.is_file() and target.stat().st_size > 0:
-                img_ok += 1
-                continue
-            success = await download_image(img.file_token, target)
-            if success:
-                img_ok += 1
-            else:
-                img_fail += 1
-    print(f"[images] 下载完成: 成功 {img_ok}, 失败 {img_fail}")
-
-    # 5. 构建 manifest
-    from astrbot_plugin_feishu_qa.corpus.parser import ParseResult
-
-    parsed = ParseResult(entries=entries)
-    manifest = build_manifest(
-        parsed, revision_id=revision_id, document_id="fuuumusic_com"
+    await asyncio.gather(
+        *(one(img) for e in manifest.get("entries", []) for img in e.get("images", []))
     )
-    manifest["source"] = "fuuumusic.com"
-
-    # 6. 提交快照
-    store = SnapshotStore(data_root)
-    old = store.load()
-    diff = diff_manifests(old, manifest)
-
-    if old is not None and old.get("content_hash") == manifest["content_hash"]:
-        print(f"[unchanged] hash={manifest['content_hash'][:12]}…")
-        if not args.check_idempotent:
-            return 0
+    if state["failed"]:
+        logger.warning(
+            "[fuuumusic] 图片下载: 成功 %d 失败 %d(失败不影响检索)",
+            state["ok"],
+            state["failed"],
+        )
     else:
-        store.commit(manifest)
-        print(
-            f"[built] entries={manifest['entry_count']} "
-            f"images={manifest['image_count']} "
-            f"hash={manifest['content_hash'][:12]}… "
-            f"(added={diff['added']} updated={diff['updated']} removed={diff['removed']})"
-        )
+        logger.info("[fuuumusic] 图片下载完成: %d 张(images_dir=%s)", state["ok"], images_dir)
+    return state["ok"], state["failed"]
 
-    # 7. 幂等校验
-    if args.check_idempotent:
-        pages2 = await fetch_all_pages(urls)
-        entries2 = [page_to_entry(p, revision_id=revision_id) for p in pages2]
-        parsed2 = ParseResult(entries=entries2)
-        manifest2 = build_manifest(
-            parsed2, revision_id=revision_id, document_id="fuuumusic_com"
+
+# ── CLI(本地构建/验收用;线上走插件内同步) ──
+
+
+async def _run_cli(data_root: Path, *, check_idempotent: bool) -> int:
+    html = await fetch_url(QA_PAGE_URL)
+    if not html:
+        print("[ERROR] 无法获取问答聚合页")
+        return 1
+
+    revision_id = int(datetime.now(UTC).timestamp())
+    entries = parse_qa_document(html, revision_id=revision_id)
+    if not entries:
+        print("[ERROR] 未解析出任何条目")
+        return 1
+
+    manifest = build_manifest(
+        ParseResult(entries=entries),
+        revision_id=revision_id,
+        document_id="fuuumusic_qa",
+        source=SOURCE_NAME,
+    )
+    ok, failed = await download_manifest_images(manifest, data_root)
+    print(f"[build] entries={manifest['entry_count']} images={ok}(失败 {failed})")
+
+    store = SnapshotStore(data_root)
+    store.save_slice(SOURCE_NAME, manifest)
+    merged = merge_manifests(
+        [
+            (SOURCE_FEISHU, store.load_slice(SOURCE_FEISHU)),
+            (SOURCE_NAME, store.load_slice(SOURCE_NAME)),
+        ]
+    )
+    store.commit(merged)
+    print(
+        f"[merged] entries={merged['entry_count']} sources="
+        f"{ {k: v['kept'] for k, v in merged['sources'].items()} }"
+    )
+
+    if check_idempotent:
+        again = build_manifest(
+            ParseResult(entries=parse_qa_document(html, revision_id=revision_id)),
+            revision_id=revision_id,
+            document_id="fuuumusic_qa",
+            source=SOURCE_NAME,
         )
-        h1, h2 = manifest_content_hash(manifest), manifest_content_hash(manifest2)
+        h1, h2 = manifest_content_hash(manifest), manifest_content_hash(again)
         if h1 != h2:
             print("[FAIL] 幂等校验失败:两次构建 hash 不一致")
             return 1
         print(f"[ok] 幂等校验通过 hash={h1[:12]}…")
-
     return 0
 
 
+def main() -> int:
+    ap = argparse.ArgumentParser(description="从 fuuumusic.com 构建 Cakewalk Sonar 中文语料")
+    ap.add_argument("--data-root", type=Path, default=None)
+    ap.add_argument("--check-idempotent", action="store_true")
+    args = ap.parse_args()
+    data_root = args.data_root or Path(__file__).resolve().parent / "data" / "feishu_qa"
+    return asyncio.run(_run_cli(data_root, check_idempotent=args.check_idempotent))
+
+
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    raise SystemExit(main())

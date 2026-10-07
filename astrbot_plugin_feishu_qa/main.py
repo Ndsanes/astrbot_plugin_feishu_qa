@@ -21,18 +21,26 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.star.star_tools import StarTools
 
 from .adapter.gateway import DOC_FORMAT_XML, GatewayClient
-from .answer.direct import DirectAnswer, format_link_list
-from .answer.router import AnswerRouter
-from .corpus.builder import build_manifest, diff_manifests
-from .corpus.model import extract_symptom_tags, normalize_title
-from .corpus.parser import parse_xml
-from .fuuumusic import (
-    discover_sections,
-    fetch_all_pages,
-    fetch_url,
-    page_to_entry,
-    parse_sitemap,
+from .answer.direct import (
+    SOURCE_ATTRIBUTION,
+    SOURCE_ATTRIBUTION_FUUUMUSIC,
+    SOURCE_ATTRIBUTION_MIXED,
+    DirectAnswer,
+    format_link_list,
 )
+from .answer.router import AnswerRouter
+from .corpus.builder import build_manifest, diff_manifests, merge_manifests
+from .corpus.model import extract_symptom_tags, normalize_title
+from .corpus.parser import ParseResult, parse_xml
+from .fuuumusic import (
+    QA_PAGE_URL,
+    SOURCE_FEISHU,
+    discover_sections,
+    download_manifest_images,
+    fetch_url,
+    parse_qa_document,
+)
+from .fuuumusic import SOURCE_NAME as SOURCE_FUUUMUSIC
 from .jev.client import DEFAULT_ENDPOINT as DEFAULT_JEV_ENDPOINT
 from .jev.client import DEFAULT_MODEL as DEFAULT_JEV_MODEL
 from .jev.client import JevClient, noul_question
@@ -104,7 +112,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.11",
+    "0.9.12",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -587,6 +595,7 @@ class FeishuQaPlugin(Star):
     # ── 生命周期 ──
 
     async def initialize(self) -> None:
+        self._migrate_snapshot_to_slices()
         if not self.adapter.available:
             logger.warning(
                 "[FeishuQA] lark_cli 平台未加载,飞书拉取/授权不可用,本地语料继续服务"
@@ -595,48 +604,77 @@ class FeishuQaPlugin(Star):
             self._sync_task = asyncio.create_task(self._sync_loop())
         if bool(self._cfg("FUUUMUSIC_ENABLED", True)):
             self._fuuumusic_task = asyncio.create_task(self._fuuumusic_sync_loop())
-            self._update_fuuumusic_schema()
         if bool(self._cfg("JEV_SELFTEST_ON_LOAD", True)):
             # 同步执行:管理员在日志里立刻能看到 key/网络是否通,而不是等首问
             self._jev_selfcheck()
 
-    def _update_fuuumusic_schema(self) -> None:
-        """从 sitemap 获取最新目录列表，更新 _conf_schema.json 的 default 字段。"""
+    def _refresh_fuuumusic_sections(self, html: str) -> None:
+        """把页面当前的章节名同步进配置 schema 的 ``FUUUMUSIC_SECTIONS`` 默认值。
+
+        纯粹是为了让 WebUI 配置页能列出**当前**可选的章节。写的是插件目录下的
+        ``_conf_schema.json``(临时文件 + 原子替换),失败只告警——配置页少几个
+        选项不影响问答。
+
+        刻意**不放在 initialize 里**:旧实现在插件启动时同步抓网回写,线上实测
+        最坏阻塞加载约 10 秒,期间整台机器人不处理消息。现在只在同步任务的
+        上下文里做,且复用已经抓下来的页面。
+        """
         try:
-            import json
-            from pathlib import Path
-
-            schema_path = Path(__file__).parent / "_conf_schema.json"
-            if not schema_path.exists():
-                return
-
-            # 同步获取 sitemap（initialize 是 async，但这里用同步方式避免阻塞）
-            import urllib.request
-
-            req = urllib.request.Request(
-                "https://www.fuuumusic.com/sitemap.xml",
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                sitemap_xml = resp.read().decode("utf-8")
-
-            sections = discover_sections(sitemap_xml)
+            sections = discover_sections(html)
             if not sections:
                 return
-
-            # 读取当前 schema
+            schema_path = Path(__file__).parent / "_conf_schema.json"
             schema = json.loads(schema_path.read_text())
-
-            # 更新 FUUUMUSIC_SECTIONS 的 default
-            if "FUUUMUSIC_SECTIONS" in schema:
-                schema["FUUUMUSIC_SECTIONS"]["default"] = {s: False for s in sections}
-                schema_path.write_text(json.dumps(schema, ensure_ascii=False, indent=2))
-                logger.info(
-                    "[FeishuQA] fuuumusic schema 已更新，发现 %d 个目录",
-                    len(sections),
-                )
+            node = schema.get("FUUUMUSIC_SECTIONS")
+            if not isinstance(node, dict):
+                return
+            current = node.get("default")
+            current = current if isinstance(current, dict) else {}
+            # 保留用户已勾选的值,只补章节;新章节默认 false(= 不过滤)。
+            merged = {s: bool(current.get(s, False)) for s in sections}
+            for key, value in current.items():
+                merged.setdefault(key, bool(value))
+            if merged == current:
+                return
+            node["default"] = merged
+            tmp = schema_path.with_name("_conf_schema.json.tmp")
+            tmp.write_text(json.dumps(schema, ensure_ascii=False, indent=2))
+            tmp.replace(schema_path)
+            logger.info("[FeishuQA] 配置页章节选项已刷新: %s", " / ".join(sections))
         except Exception as exc:
-            logger.warning("[FeishuQA] fuuumusic schema 更新失败: %s", exc)
+            logger.warning("[FeishuQA] 章节选项刷新失败(不影响问答): %s", exc)
+
+    def _migrate_snapshot_to_slices(self) -> None:
+        """把单来源时代的 ``corpus.json`` 就地拆成一个分片(一次性,幂等)。
+
+        分片化之前只存在一份 crontab 式的整篇快照;若不做这步,首个跑起来的
+        来源会算出"只有自己"的合并结果,把另一个来源的条目静默抹掉——尤其在
+        ``SYNC_INTERVAL_HOURS=0``(关闭飞书自动同步)时飞书语料会凭空消失。
+        纯本地文件操作,失败只告警。
+        """
+        try:
+            if self.store.load_slice(SOURCE_FEISHU) or self.store.load_slice(SOURCE_FUUUMUSIC):
+                return
+            old = self.store.load()
+            if not old or not old.get("entries"):
+                return
+            # 旧版网页同步会把 manifest["source"] 写成 "fuuumusic.com"
+            name = (
+                SOURCE_FUUUMUSIC
+                if str(old.get("source") or "") in ("fuuumusic.com", SOURCE_FUUUMUSIC)
+                else SOURCE_FEISHU
+            )
+            for entry in old["entries"]:
+                entry.setdefault("source", name)
+            old["source"] = name
+            self.store.save_slice(name, old)
+            logger.info(
+                "[FeishuQA] 旧快照已迁移为分片 source=%s entries=%d",
+                name,
+                len(old["entries"]),
+            )
+        except Exception as exc:
+            logger.warning("[FeishuQA] 快照迁移失败(不影响问答): %s", exc)
 
     async def terminate(self) -> None:
         for task in (self._sync_task, getattr(self, "_fuuumusic_task", None)):
@@ -678,7 +716,10 @@ class FeishuQaPlugin(Star):
         )
         parsed = parse_xml(doc.content, source_revision=doc.revision_id)
         manifest = build_manifest(
-            parsed, revision_id=doc.revision_id, document_id=doc.document_id
+            parsed,
+            revision_id=doc.revision_id,
+            document_id=doc.document_id,
+            source=SOURCE_FEISHU,
         )
         old = self.store.load()
         diff = diff_manifests(old, manifest)
@@ -711,9 +752,9 @@ class FeishuQaPlugin(Star):
                 else:
                     redownloaded += 1
 
-        store = SnapshotStore(self.data_root)
-        store.commit(manifest)
-        self._load_corpus()
+        # 飞书只写自己的分片;合并快照由全部分片重算(网页那份不会被抹掉)。
+        self.store.save_slice(SOURCE_FEISHU, manifest)
+        self._commit_merged()
         if relinked:
             samples = ";".join(
                 f"{e['id']}:{old_locs.get(e['id'], '?')}→{e['source_locator']}"
@@ -740,69 +781,75 @@ class FeishuQaPlugin(Star):
         }
 
     async def _sync_fuuumusic(self) -> dict:
-        """从 fuuumusic.com 抓取中文资料并合并到语料。"""
+        """抓取小闻的问答聚合页 → 逐条结构化 → 写入自己的分片 → 重算合并快照。
+
+        只写 ``corpus_sources/fuuumusic.json``,绝不直接改写 ``corpus.json``:
+        合并视图由全部分片重算(见 ``_commit_merged``)。2026-10-07 事故正是
+        两个来源各自整篇覆盖快照,导致 47 条飞书语料与 76 条网页语料每 12 小时
+        轮流消失。
+        """
         if not bool(self._cfg("FUUUMUSIC_ENABLED", True)):
             return {"status": "disabled"}
 
         try:
-            # 1. 解析 sitemap
-            sitemap_xml = await fetch_url("https://www.fuuumusic.com/sitemap.xml")
-            if sitemap_xml is None:
-                return {"status": "error", "reason": "sitemap fetch failed"}
+            html = await fetch_url(QA_PAGE_URL)
+            if not html:
+                return {"status": "error", "reason": "qa page fetch failed"}
 
-            urls = parse_sitemap(sitemap_xml)
-            if not urls:
-                return {"status": "error", "reason": "no FAQ/help URLs found"}
-
-            # 2. 抓取页面
-            pages = await fetch_all_pages(urls)
-            if not pages:
-                return {"status": "error", "reason": "no pages fetched"}
-
-            # 3. 转换为 QaEntry
+            sections_cfg = self._cfg("FUUUMUSIC_SECTIONS", {}) or {}
+            sections = [k for k, v in dict(sections_cfg).items() if v]
             revision_id = int(datetime.now(UTC).timestamp())
-            new_entries = [page_to_entry(p, revision_id=revision_id) for p in pages]
+            entries = parse_qa_document(
+                html, revision_id=revision_id, sections=sections or None
+            )
+            if not entries:
+                # 章节白名单写错(或站点改版)时宁可保留旧分片,也不要用空语料
+                # 覆盖掉用户已经能用的知识库。
+                return {
+                    "status": "error",
+                    "reason": f"no entries parsed (sections={sections})",
+                }
 
-            # 4. 合并到现有 manifest
-            old = self.store.load()
-            if old and old.get("source") == "fuuumusic.com":
-                # 已有 fuuumusic 数据，合并
-                existing_ids = {e["id"] for e in old.get("entries", [])}
-                merged = list(old.get("entries", []))
-                added = 0
-                for entry in new_entries:
-                    if entry.id not in existing_ids:
-                        merged.append(entry.to_dict())
-                        added += 1
-                if added == 0:
-                    return {"status": "unchanged", "pages": len(pages)}
-                old["entries"] = merged
-                old["entry_count"] = len(merged)
-                old["revision_id"] = revision_id
-                old["built_at"] = datetime.now(UTC).isoformat()
-                manifest = old
-            else:
-                # 首次导入或从其他源切换
-                from .corpus.parser import ParseResult
-                parsed = ParseResult(entries=new_entries)
-                manifest = build_manifest(
-                    parsed, revision_id=revision_id, document_id="fuuumusic_com"
-                )
-                manifest["source"] = "fuuumusic.com"
-
-            # 5. 提交并重新加载
-            store = SnapshotStore(self.data_root)
-            store.commit(manifest)
-            self._load_corpus()
+            manifest = build_manifest(
+                ParseResult(entries=entries),
+                revision_id=revision_id,
+                document_id="fuuumusic_qa",
+                source=SOURCE_FUUUMUSIC,
+            )
+            images_ok, image_failures = await download_manifest_images(
+                manifest, self.data_root
+            )
+            self.store.save_slice(SOURCE_FUUUMUSIC, manifest)
+            merged = self._commit_merged()
+            self._refresh_fuuumusic_sections(html)
 
             return {
                 "status": "synced",
-                "pages": len(pages),
-                "entries": manifest.get("entry_count", len(new_entries)),
+                "entries": manifest["entry_count"],
+                "images": images_ok,
+                "image_failures": image_failures,
+                "corpus_entries": merged["entry_count"],
+                "sources": {k: v["kept"] for k, v in merged.get("sources", {}).items()},
             }
         except Exception as exc:
             logger.warning("[FeishuQA] fuuumusic 同步失败: %s", exc)
             return {"status": "error", "reason": str(exc)}
+
+    def _commit_merged(self) -> dict:
+        """由全部分片重算合并快照并热替换检索器。
+
+        分片顺序即优先级:飞书在前——网页里的 FAQ 部分是飞书文档的镜像
+        (同章节同标题 → 同 ID),飞书那份是人工维护的原文且图片已落地。
+        """
+        merged = merge_manifests(
+            [
+                (SOURCE_FEISHU, self.store.load_slice(SOURCE_FEISHU)),
+                (SOURCE_FUUUMUSIC, self.store.load_slice(SOURCE_FUUUMUSIC)),
+            ]
+        )
+        self.store.commit(merged)
+        self._load_corpus()
+        return merged
 
     # ── 指令 ──
 
@@ -1004,6 +1051,19 @@ class FeishuQaPlugin(Star):
             "请勿复述条目正文,链接里含图文步骤。"
         )
 
+    def _attribution_for(self, entries: list) -> str:
+        """按条目来源给署名——链接指向哪里就署哪里的名。
+
+        混投时用中性说法:一轮里同时发出飞书与网页条目,任何单边署名都只
+        覆盖一半,反而误导。
+        """
+        sources = {str(getattr(e, "source", "") or SOURCE_FEISHU) for e in entries}
+        if sources == {SOURCE_FUUUMUSIC}:
+            return SOURCE_ATTRIBUTION_FUUUMUSIC
+        if len(sources) > 1:
+            return SOURCE_ATTRIBUTION_MIXED
+        return SOURCE_ATTRIBUTION
+
     def _format_links(self, event, entries: list) -> DirectAnswer:
         """所有用户可见链接消息的唯一出口。
 
@@ -1018,6 +1078,7 @@ class FeishuQaPlugin(Star):
             entries,
             url_of=self._wiki_block_url,
             markdown=platform_name == "qq_official",
+            attribution=self._attribution_for(entries),
         )
 
     def _build_link_list(self, event, entries: list) -> DirectAnswer:
@@ -1032,12 +1093,21 @@ class FeishuQaPlugin(Star):
         return self._format_links(event, entries)
 
     def _wiki_block_url(self, entry) -> str:
-        """构造飞书文档锚点直达链接(WIKI_URL#block_id);无定位时退回整篇。"""
+        """条目直达链接。
+
+        网页来源的条目 ``source_locator`` 本身就是**可点的完整 URL**
+        (``.../cakewalk-sonar-faq/all#q38``),直接返回;否则按飞书文档锚点拼。
+        多来源之前只有"飞书锚点"一种拼法,网页条目的定位符会被拼成
+        ``<wiki>#https://www.fuuumusic.com/...#q38`` 这种废链。
+        """
+        locator = str(getattr(entry, "source_locator", "") or "").strip()
+        if locator.startswith(("http://", "https://")):
+            return locator
         base = str(self._cfg("WIKI_URL", "") or "").strip().rstrip("/")
         if not base:
             return "(未配置 WIKI_URL)"
-        if entry.source_locator:
-            return f"{base}#{entry.source_locator}"
+        if locator:
+            return f"{base}#{locator}"
         return base
 
     @filter.on_llm_tool_respond()

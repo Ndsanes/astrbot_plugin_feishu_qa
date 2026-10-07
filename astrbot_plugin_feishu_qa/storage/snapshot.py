@@ -16,6 +16,9 @@ logger = logging.getLogger("feishu_qa.storage")
 
 SNAPSHOT_NAME = "corpus.json"
 STAGING_DIRNAME = ".staging"
+# 各来源的分片目录。corpus.json 是这些分片的合并视图(2026-10-07 多来源改造),
+# 单一来源不得直接改写它——否则两个来源会互相覆盖。
+SOURCES_DIRNAME = "corpus_sources"
 
 
 class SnapshotStore:
@@ -73,3 +76,37 @@ class SnapshotStore:
     def image_path(self, local_path: str) -> Path:
         """把语料中的相对路径解析为绝对路径。"""
         return self.data_root / local_path
+
+    # ── 分片(多来源) ──
+
+    def slice_path(self, source: str) -> Path:
+        """某个来源的分片文件路径。"""
+        return self.data_root / SOURCES_DIRNAME / f"{source}.json"
+
+    def load_slice(self, source: str) -> dict | None:
+        """读某个来源的分片;不存在或损坏返回 None(视为该来源暂无数据)。"""
+        try:
+            return json.loads(self.slice_path(source).read_text())
+        except FileNotFoundError:
+            return None
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.error("[snapshot] 分片 %s 读取失败(视为无): %s", source, exc)
+            return None
+
+    def save_slice(self, source: str, manifest: dict) -> None:
+        """原子写某个来源的分片。
+
+        分片必须让**每个来源各自落盘**:合并后的 ``corpus.json`` 是由全部分片
+        重算出来的派生视图,任何单一来源都无权直接覆盖它。
+        """
+        path = self.slice_path(source)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.tmp")
+        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=1))
+        os.replace(tmp, path)
+        logger.info(
+            "[snapshot] 已保存分片 source=%s entries=%s",
+            source,
+            manifest.get("entry_count"),
+        )
+

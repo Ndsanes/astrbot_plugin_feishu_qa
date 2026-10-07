@@ -101,7 +101,7 @@ def upload_plugin(zip_path: Path) -> dict:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             result = json.loads(resp.read().decode())
             print(f"[deploy] 上传成功: {result}")
             return result
