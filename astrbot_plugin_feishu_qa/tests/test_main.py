@@ -1016,3 +1016,185 @@ class TestMultiSourceCorpus:
         plugin.store.save_slice("feishu", feishu_manifest)
         merged2 = plugin._commit_merged()
         assert any(e["id"] == fuu.id for e in merged2["entries"])
+
+# ── 群消息旁听(主动答) ──
+
+
+def _watch_plugin(tmp_path: Path, monkeypatch, **overrides) -> FeishuQaPlugin:
+    """带语料的插件实例;overrides 覆盖配置(PROACTIVE_* 在构造时读取)。"""
+    monkeypatch.setenv("ASTRBOT_DATA_DIR", str(tmp_path))
+    config = {
+        "WIKI_URL": "https://my.feishu.cn/wiki/test",
+        "ENABLED_GROUPS": ["*"],
+        "ADMIN_USERS": ["admin1"],
+        "SYNC_INTERVAL_HOURS": 0,
+        "AUTH_CHECK_HOURS": 0,
+        **overrides,
+    }
+    plugin = FeishuQaPlugin(context=None, config=config)
+    from astrbot_plugin_feishu_qa.corpus.builder import build_manifest
+    from astrbot_plugin_feishu_qa.corpus.parser import parse_xml
+    from astrbot_plugin_feishu_qa.storage.snapshot import SnapshotStore
+
+    xml = (FIXTURES / "qa_r8268.xml").read_text()
+    manifest = build_manifest(
+        parse_xml(xml, source_revision=8268), revision_id=8268, document_id="doc"
+    )
+    SnapshotStore(plugin.data_root).commit(manifest)
+    assert plugin._load_corpus() is True
+    return plugin
+
+
+def _group_event(text: str, *, sender: str = "u1", messages=None):
+    from types import SimpleNamespace
+
+    return AstrMessageEvent(
+        message_str=text,
+        message_obj=SimpleNamespace(type="GROUP_MESSAGE"),
+        platform_meta=SimpleNamespace(id="aiocqhttp"),
+        session_id="g1",
+        group_id="g1",
+        sender_id=sender,
+        self_id="10000",
+        messages=messages or [],
+    )
+
+
+async def _drain(plugin: FeishuQaPlugin) -> None:
+    """等所有 settle/宽限计时器跑完(settle 配 0,故只差几个事件循环 tick)。"""
+    for _ in range(5):
+        tasks = list(plugin._watch_tasks.values()) + list(
+            plugin._watch_grace_tasks.values()
+        )
+        if not tasks:
+            await asyncio.sleep(0)
+            continue
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _sent_text(event) -> str:
+    """把 event.send 出去的链拼成纯文本(兼容 Node 合并转发与普通消息)。"""
+    parts: list[str] = []
+    for chain in event.sent:
+        for item in getattr(chain, "chain", []):
+            if isinstance(item, tuple):
+                parts.append(str(item[1]))
+                continue
+            for comp in getattr(item, "content", []) or []:
+                parts.append(str(getattr(comp, "text", "")))
+    return "".join(parts)
+
+
+class TestProactiveWatch:
+    def test_off_mode_has_no_watcher(self, tmp_path, monkeypatch) -> None:
+        plugin = _watch_plugin(tmp_path, monkeypatch, PROACTIVE_MODE="off")
+        assert plugin._watch is None
+        assert plugin._watch_planner is None
+
+    async def test_shadow_mode_logs_without_sending(self, tmp_path, monkeypatch) -> None:
+        plugin = _watch_plugin(
+            tmp_path, monkeypatch, PROACTIVE_MODE="shadow", PROACTIVE_SETTLE_SECONDS=0
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办")
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert event.sent == []
+        log = (plugin.data_root / "decisions.jsonl").read_text()
+        assert "shadow_would_answer" in log
+
+    async def test_first_ask_sends_link(self, tmp_path, monkeypatch) -> None:
+        plugin = _watch_plugin(
+            tmp_path, monkeypatch, PROACTIVE_MODE="first_ask", PROACTIVE_SETTLE_SECONDS=0
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办")
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert event.sent, "first_ask 应该投递链接"
+        text = _sent_text(event)
+        assert "以下章节与你的问题相关" in text
+        assert "没有自带模板" in text
+
+    async def test_hot_chat_suppresses(self, tmp_path, monkeypatch) -> None:
+        from astrbot_plugin_feishu_qa.group_watch import WatchMessage
+
+        plugin = _watch_plugin(
+            tmp_path, monkeypatch, PROACTIVE_MODE="first_ask", PROACTIVE_SETTLE_SECONDS=0
+        )
+        import time
+
+        now = time.time()
+        for i in range(3):
+            plugin._watch.note(
+                WatchMessage(
+                    group_id="g1", sender_id=f"other{i}", text="我也一样", ts=now - 3 + i
+                )
+            )
+        event = _group_event("cakewalk 没有自带模板怎么办")
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert event.sent == []
+
+    async def test_bot_directed_message_is_left_to_tier0(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        plugin = _watch_plugin(
+            tmp_path, monkeypatch, PROACTIVE_MODE="first_ask", PROACTIVE_SETTLE_SECONDS=0
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办")
+        event.is_at_or_wake_command = True
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert event.sent == []
+        assert plugin._watch.get("g1", "u1") is None
+
+    async def test_human_grace_cancelled_when_owner_replies(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from astrbot.api.message_components import At
+
+        from astrbot_plugin_feishu_qa.group_watch import WatchMessage
+
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办", messages=[At(qq="owner")])
+        burst = plugin._watch.note(
+            WatchMessage(
+                group_id="g1",
+                sender_id="u1",
+                text="cakewalk 没有自带模板怎么办",
+                ts=100.0,
+                audience="human",
+                targets=frozenset({"owner"}),
+            )
+        )
+        assert burst is not None
+        plugin._watch.note(
+            WatchMessage(group_id="g1", sender_id="owner", text="你重装一下试试", ts=120.0)
+        )
+        await plugin._watch_human_grace(event, ("g1", "u1"), {})
+        assert event.sent == []
+        log = (plugin.data_root / "decisions.jsonl").read_text()
+        assert "suppressed_human_replied" in log
+
+    async def test_human_grace_sends_when_nobody_answers(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from astrbot.api.message_components import At
+
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办", messages=[At(qq="owner")])
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert event.sent, "没人回应时应该兜底"
+        assert "群主可能还没看到" in _sent_text(event)

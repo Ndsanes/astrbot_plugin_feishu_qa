@@ -57,3 +57,19 @@ class Reply:
         self.chain = chain or []
         self.message_str = message_str
         self.text = text
+
+class At:
+    """@ 消息段。真实字段见 astrbot.core.message.components.At(qq: int|str)。"""
+
+    type = "At"
+
+    def __init__(self, qq=0, name="", **k):
+        self.qq = qq
+        self.name = name
+
+
+class AtAll(At):
+    type = "At"
+
+    def __init__(self, **k):
+        super().__init__(qq="all", **k)

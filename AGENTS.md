@@ -41,9 +41,10 @@ Key flow points an editor must preserve:
 - `astrbot_plugin_feishu_qa/corpus/` — `model.py` (dataclasses `QaEntry`/`QaImage`, ID derivation), `parser.py` (doc XML → entries), `builder.py` (manifest build/diff/content hash)
 - `astrbot_plugin_feishu_qa/retrieval/scorer.py` — deterministic `Retriever`, `Confidence` levels
 - `astrbot_plugin_feishu_qa/answer/` — `router.py` (whitelist + confidence routing, pure logic), `direct.py` (direct-answer formatting)
+- `astrbot_plugin_feishu_qa/group_watch.py` — 群消息旁听/主动答的纯逻辑:`GroupWatcher` 按「同一发言人 + 无实质插话 + ≤10 分钟 + ≤8 条」拼 burst(碎片提问),`candidate_windows` 取全部连续子窗口,`ProactivePlanner` 用本地检索取最高分窗口(HIGH + 主题词支撑 + 问句标记才出手),`ProactiveLimiter` 管每群/每人/同问题限流。`PROACTIVE_MODE` 默认 `shadow`(只落决策日志不发消息),`human_only` 只在「@真人且无人回应」时兜底,`first_ask` 首问就答
 - `astrbot_plugin_feishu_qa/storage/snapshot.py` — atomic snapshot persistence (`SnapshotStore`)
 - `astrbot_plugin_feishu_qa/learn/` — `candidate.py` `/learn` candidate extraction + pending-QA store; `writeback.py` 写回纯逻辑（块构造、查重守卫、记录键）。真实写回只允许指向 `LEARNING_WRITEBACK_DOC_URL` 配置的**副本文档**，生产文档写回是人工步骤
-- `astrbot_plugin_feishu_qa/fuuumusic.py` — 小闻的奇妙屋(https://www.fuuumusic.com) 语料接入:抓取问答聚合页 `/cakewalk-sonar-faq/all`(100 条 = 47 FAQ + 53 篇官方文档翻译),按站点自身的 `<details class="qa-item" id="qN" data-qtitle="【症状标签】问题？">` 结构拆成逐条 `QaEntry`(复用飞书条目字段形态,故检索/闸门/Jev/链接渲染无需改动);`resolve_sections` 处理章节白名单(过期即退化为不过滤);所有 HTTP 经 `asyncio.to_thread`(**绝不可在协程里直接跑同步 urllib**,会卡死整个机器人)
+- `astrbot_plugin_feishu_qa/fuuumusic.py` — 小闻的奇妙屋(https://www.fuuumusic.com) 语料接入:抓取问答聚合页 `/cakewalk-sonar-faq/all`(100 条 = 47 FAQ + 53 篇官方文档翻译),按站点自身的 `<details class="qa-item" id="qN" data-qtitle="【症状标签】问题？">` 结构拆成逐条 `QaEntry`(复用飞书条目字段形态,故检索/闸门/Jev/链接渲染无需改动);**官方文档另抓全文页** `/cakewalk-sonar-help/<slug>`(聚合页只有导语摘要,全文在 `div.cw-body`,分类/更新时间/官方原文在 JSON-LD),`collect_help_entries` 按「阅读全文」链接 + 索引页发现页面、逐页替换摘要条目(`data-qkw` 检索关键词一并带过去;单页失败保留摘要);`resolve_sections` 处理章节白名单(过期即退化为不过滤);所有 HTTP 经 `asyncio.to_thread`(**绝不可在协程里直接跑同步 urllib**,会卡死整个机器人)
 - `astrbot_plugin_feishu_qa/tools/build_qa_corpus.py` — 离线/在线 corpus build CLI
 - `astrbot_lark_kit/` — `cli.py` / `envelope.py` / `errors.py`（含 `UmoParseError`）/ `rate_limit.py` / `auth.py` / `bootstrap.py` / `events.py` / `messaging.py` / `state.py` / `platforms.py`（UMO → 平台实例身份，纯解析层）；`pyproject.toml` 零运行时依赖可安装
 - `tests/` under each package; `astrbot_plugin_feishu_qa/tests/fixtures/` holds real-corpus snapshots (`qa_r8268.xml`, `qa_r8394.xml`, `meta.json`, `retrieval_queries.json`)
@@ -99,7 +100,7 @@ No build step exists; packages run from source.
 ## Testing & QA
 
 - pytest with `asyncio_mode = "auto"` (bare `async def test_*` works, no decorators). 根 `testpaths` 含 `astrbot_lark_kit/tests` 与 `astrbot_plugin_feishu_qa/tests`；bili_verify 是独立仓库（gitignore），测试用 `pytest astrbot_plugin_bili_verify_feishu/tests -q` 显式运行（其 tests/stubs 提供 astrbot 假包）。
-- 当前基线（2026-08-24 代码清理轮）：kit 88 + feishu_qa 86 = **174 passed**（根套件）+ bili_verify 49 = 全家桶 223。基线值只增不减，验收标准是"全套 PASS"而非固定数字。
+- 当前基线（2026-10-24）：kit 88 + lark_cli_platform 55 + feishu_qa 402 = **545 passed**（根套件）+ bili_verify 54 = 全家桶 599。基线值只增不减，验收标准是"全套 PASS"而非固定数字。
 - **bili_verify 白名单条目形态（v0.0.7 教训）**：qq_official 条目须为完整 UMO `实例ID:GroupMessage:群openid`（多 bot 轮询按首段定位归属 bot）；`AdmissionsStore.is_whitelisted` 同时接受裸 openid 与 UMO 全串（按末段匹配）。改任何一侧的数据形态时，轮询、校验、审批三条链路必须同步，否则会出现"能拉到申请但被判非白名单"的静默丢弃。
 - When the real `astrbot` package isn't installed, [conftest.py](astrbot_plugin_feishu_qa/tests/conftest.py) prepends `tests/stubs/` containing a minimal fake `astrbot` package (`api.event.AstrMessageEvent`, `api.star.Star`, etc.) so the suite runs offline.
 - Tests use real fixture corpora (`qa_r8268.xml`, revision-tagged) rather than mocks for parser/builder/retrieval paths; `test_main.py` builds a live plugin instance against a `tmp_path` data dir via `monkeypatch.setenv("ASTRBOT_DATA_DIR", ...)`.

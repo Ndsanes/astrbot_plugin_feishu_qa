@@ -149,7 +149,7 @@
   "FUUUMUSIC_SECTIONS": {
     "description": "要导入的 fuuumusic 章节(留空 = 全部导入)",
     "type": "list",
-    "hint": "留空 = 导入整页全部 100 条;填入章节名 = 只导入这些章节,例如 三、Cakewalk 官方文档（中文翻译）。章节名见站点问答页的一级标题。",
+    "hint": "留空 = 导入问答页全部条目(中文问答 + 官方文档中文译文);填入章节名 = 只导入这些章节,例如 三、Cakewalk 官方文档（中文翻译）。官方文档会按全文页导入(聚合页只有摘要)。章节名见站点问答页的一级标题。",
     "default": []
   },
   "FUUUMUSIC_SYNC_INTERVAL_HOURS": {
@@ -157,5 +157,41 @@
     "type": "int",
     "hint": "0 = 关闭自动同步;fuuumusic 更新频率较低,建议 24 小时",
     "default": 24
+  },
+  "PROACTIVE_MODE": {
+    "description": "群消息旁听与主动答模式",
+    "type": "string",
+    "hint": "off=关闭;shadow=只把判定写进决策日志、不发消息(默认,用来量一周);human_only=只在有人 @ 真人且宽限期内无人回应时兜底;first_ask=群内首问就答(仍受 HIGH 闸门与限流约束)",
+    "default": "shadow"
+  },
+  "PROACTIVE_GROUPS": {
+    "description": "启用主动答的群(留空 = 跟随 ENABLED_GROUPS)",
+    "type": "list",
+    "hint": "填群号或完整 UMO;留空表示插件启用的群都参与。先用 shadow 观测,确认误报率再开 first_ask",
+    "default": []
+  },
+  "PROACTIVE_SETTLE_SECONDS": {
+    "description": "最后一条碎片之后等待多少秒再判定",
+    "type": "int",
+    "hint": "用户常把一句话拆成几条发;静默这么久才评估,期间新碎片会重新计时",
+    "default": 8
+  },
+  "PROACTIVE_HUMAN_GRACE_SECONDS": {
+    "description": "@真人提问的兜底宽限(秒)",
+    "type": "int",
+    "hint": "有人 @ 群主/别人提问时先等这么久;被 @ 的人回了、有人引用提问者、提问者说解决了,都不再兜底",
+    "default": 180
+  },
+  "PROACTIVE_MAX_PER_DAY": {
+    "description": "每个群每天最多主动答几条",
+    "type": "int",
+    "hint": "0 = 不限。支持群建议 8 条,宁可漏答也不要刷屏",
+    "default": 8
+  },
+  "PROACTIVE_MAX_PER_USER_HOUR": {
+    "description": "每个人每小时最多触发几次主动答",
+    "type": "int",
+    "hint": "同一人连续追问时避免连发;0 = 不限",
+    "default": 2
   }
 }

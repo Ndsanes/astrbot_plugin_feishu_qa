@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,13 +36,21 @@ from .corpus.parser import ParseResult, parse_xml
 from .fuuumusic import (
     QA_PAGE_URL,
     SOURCE_FEISHU,
+    collect_help_entries,
     discover_sections,
     download_manifest_images,
     fetch_url,
     parse_qa_document,
     resolve_sections,
+    sections_include_official,
 )
 from .fuuumusic import SOURCE_NAME as SOURCE_FUUUMUSIC
+from .group_watch import (
+    GroupWatcher,
+    ProactiveLimiter,
+    ProactivePlanner,
+    WatchMessage,
+)
 from .jev.client import DEFAULT_ENDPOINT as DEFAULT_JEV_ENDPOINT
 from .jev.client import DEFAULT_MODEL as DEFAULT_JEV_MODEL
 from .jev.client import JevClient, noul_question
@@ -79,6 +88,13 @@ from .storage.snapshot import SnapshotStore
 PLUGIN_NAME = "astrbot_plugin_feishu_qa"
 DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 
+# 主动答模式:off 不旁听;shadow 只记不发;human_only 仅在"有人 @ 真人且
+# 无人回应"时兜底;first_ask 群内首问就答。默认 shadow —— 先量一周再开闸。
+_PROACTIVE_MODES = {"off", "shadow", "human_only", "first_ask"}
+# 主动发出的消息必须自己说明身份与理由:用户并没有 @ 机器人。
+_PROACTIVE_GROUP_PREFIX = "【FAQ 自动回复】\n\n"
+_PROACTIVE_HUMAN_PREFIX = "群主可能还没看到,先给你一份参考:\n\n"
+
 # 单轮自动附链上限:链接是承诺不是列表,多则刷屏且冲淡主答案。
 _MAX_AUTO_LINKS = 3
 
@@ -113,7 +129,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.12",
+    "0.9.13",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -147,6 +163,23 @@ class FeishuQaPlugin(Star):
         self._decision_cache = DecisionCache(
             ttl_seconds=float(self._cfg("DECISION_CACHE_TTL_MINUTES", 240)) * 60
         )
+
+        # 群消息旁听(主动答):拼装/门控/限流全在 group_watch.py 的纯逻辑里,
+        # 这里只负责事件接入与定时器。默认 shadow:只落决策日志,不发言。
+        self._proactive_mode = self._resolve_proactive_mode()
+        self._proactive_groups = [
+            str(g).strip()
+            for g in (self._cfg("PROACTIVE_GROUPS", []) or [])
+            if str(g).strip()
+        ]
+        self._watch = GroupWatcher() if self._proactive_mode != "off" else None
+        self._watch_planner: ProactivePlanner | None = None
+        self._watch_limiter = ProactiveLimiter(
+            per_group_day=int(self._cfg("PROACTIVE_MAX_PER_DAY", 8)),
+            per_user_hour=int(self._cfg("PROACTIVE_MAX_PER_USER_HOUR", 2)),
+        )
+        self._watch_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self._watch_grace_tasks: dict[tuple[str, str], asyncio.Task] = {}
 
         # Jev 决策模型:只在拿到 key 时构造。未配置 / 构造失败一律 None,
         # 两个接管点见到 None 就走原本的本地判定,行为与未接入时完全一致。
@@ -570,6 +603,10 @@ class FeishuQaPlugin(Star):
                 enabled_groups=list(self._cfg("ENABLED_GROUPS", [])),
                 max_images=int(self._cfg("MAX_IMAGES", 3)),
             )
+            # 主动答的判定复用同一个检索器:语料换版后自动跟着新版走。
+            self._watch_planner = (
+                ProactivePlanner(self._retriever) if self._watch is not None else None
+            )
             self._revision = manifest.get("revision_id")
             # 语料换了 revision,旧判定对新语料不再成立,记忆整体作废。
             self._decision_cache.clear()
@@ -645,6 +682,8 @@ class FeishuQaPlugin(Star):
         for task in (self._sync_task, getattr(self, "_fuuumusic_task", None)):
             if task:
                 task.cancel()
+        for task in list(self._watch_tasks.values()) + list(self._watch_grace_tasks.values()):
+            task.cancel()
 
     # ── 后台任务 ──
 
@@ -752,7 +791,13 @@ class FeishuQaPlugin(Star):
         }
 
     async def _sync_fuuumusic(self) -> dict:
-        """抓取小闻的问答聚合页 → 逐条结构化 → 写入自己的分片 → 重算合并快照。
+        """抓取小闻的问答页 → 逐条结构化 → 写入自己的分片 → 重算合并快照。
+
+        聚合页(``/cakewalk-sonar-faq/all``)给 47 条中文问答 + 53 条官方文档
+        的导语;官方文档正文在各自的 ``/cakewalk-sonar-help/<slug>`` 全文页,
+        由 ``collect_help_entries`` 逐页抓取后用全文替换摘要(抓不到的那几页
+        保留摘要)。官方说明书重译时标题往往不变、正文会变,故同步结果带
+        条目级 diff(added/updated/removed)。
 
         只写 ``corpus_sources/fuuumusic.json``,绝不直接改写 ``corpus.json``:
         合并视图由全部分片重算(见 ``_commit_merged``)。2026-10-07 事故正是
@@ -781,8 +826,18 @@ class FeishuQaPlugin(Star):
                     available,
                 )
             revision_id = int(datetime.now(UTC).timestamp())
+            # 官方文档译文页给的是全文;聚合页那 53 条只是导语 + 「阅读全文」。
+            # 抓不到就退回摘要,宁可内容少也不让整轮同步失败。
+            help_entries = (
+                await collect_help_entries(html, revision_id=revision_id)
+                if sections_include_official(sections)
+                else {}
+            )
             entries = parse_qa_document(
-                html, revision_id=revision_id, sections=sections or None
+                html,
+                revision_id=revision_id,
+                sections=sections or None,
+                help_entries=help_entries,
             )
             if not entries:
                 # 站点改版等异常时宁可保留旧分片,也不要用空语料覆盖掉用户
@@ -798,6 +853,8 @@ class FeishuQaPlugin(Star):
                 document_id="fuuumusic_qa",
                 source=SOURCE_FUUUMUSIC,
             )
+            previous = self.store.load_slice(SOURCE_FUUUMUSIC)
+            diff = diff_manifests(previous, manifest)
             images_ok, image_failures = await download_manifest_images(
                 manifest, self.data_root
             )
@@ -807,6 +864,12 @@ class FeishuQaPlugin(Star):
             return {
                 "status": "synced",
                 "entries": manifest["entry_count"],
+                "official_docs": len(help_entries),
+                # 站点把官方说明书的中文译文单独发版:哪几篇被重译只能靠
+                # 条目级 diff 看见(标题没变、正文变了)。
+                "added": diff["added"],
+                "updated": diff["updated"],
+                "removed": diff["removed"],
                 "images": images_ok,
                 "image_failures": image_failures,
                 "corpus_entries": merged["entry_count"],
@@ -978,6 +1041,318 @@ class FeishuQaPlugin(Star):
         self._log_decision(
             stage="route", action="miss", query=text, results=plan.candidates
         )
+
+    # ── 群消息旁听(主动答) ──
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def watch_group_chat(self, event: AstrMessageEvent):
+        """旁听群消息 → 拼 burst → 按 PROACTIVE_MODE 记录或主动答。
+
+        不 yield、不 stop_event,与 Tier-0 / 主 Agent 完全并行。默认 shadow
+        模式只落决策日志:用来量"群里有多少提问其实 FAQ 答得上",不发任何消息。
+        """
+        watch = self._watch
+        planner = self._watch_planner
+        if watch is None or planner is None:
+            return
+        if not self._proactive_group_enabled(event):
+            return
+        if str(event.get_sender_id()) == str(event.get_self_id()):
+            return
+        text = (event.message_str or "").strip()
+        if not text:
+            return
+        audience, targets, has_image = self._watch_audience(event)
+        message = WatchMessage(
+            group_id=str(event.get_group_id() or event.unified_msg_origin or ""),
+            sender_id=str(event.get_sender_id()),
+            text=text,
+            ts=time.time(),
+            audience=audience,
+            targets=frozenset(targets),
+            has_image=has_image,
+        )
+        burst = watch.note(message)
+        if burst is None:
+            return
+        self._schedule_watch(event, burst)
+
+    async def _watch_after_settle(self, event, key: tuple[str, str]) -> None:
+        """最后一条碎片之后静默 N 秒再评估:把"装完了 / 闪退 / 怎么办"拼成一段。"""
+        try:
+            await asyncio.sleep(float(self._cfg("PROACTIVE_SETTLE_SECONDS", 8)))
+            watch = self._watch
+            planner = self._watch_planner
+            if watch is None or planner is None:
+                return
+            burst = watch.get(*key)
+            if burst is None or burst.answered_entry_id is not None:
+                return
+            if event.is_stopped():
+                # 这条已被 Tier-0 直答吃掉,别再补一刀。
+                return
+            decision = planner.plan(burst)
+            extra = self._watch_extra(burst, decision)
+            results = [decision.result] if decision.result is not None else []
+            if decision.action != "answer":
+                self._log_decision(
+                    stage="proactive",
+                    action="watched_no_answer",
+                    query=burst.text,
+                    extra=extra,
+                )
+                return
+            if watch.addressed_human_replied(burst):
+                # 已经有人回应(被 @ 的人开口/引用提问者/提问者说解决了):
+                # 不再补刀——无论是首问还是兜底,这条规则都先于发言。
+                self._log_decision(
+                    stage="proactive",
+                    action="suppressed_replied",
+                    query=decision.text,
+                    results=results,
+                    extra={**extra, "replied": True},
+                )
+                return
+            if burst.audience == "human":
+                # 对真人说的话(尤其 @群主):等宽限期,没人接再兜底。
+                if self._proactive_mode == "shadow":
+                    self._log_decision(
+                        stage="proactive",
+                        action="shadow_would_answer",
+                        query=decision.text,
+                        results=results,
+                        extra=extra,
+                    )
+                    return
+                self._schedule_human_grace(event, key, extra)
+                return
+            if watch.is_hot(burst.group_id, burst.sender_id, time.time()):
+                # 正在热聊:shadow 里也按"实际不会发"记,免得高估开放后的量。
+                self._log_decision(
+                    stage="proactive",
+                    action="suppressed_hot_chat",
+                    query=decision.text,
+                    results=results,
+                    extra=extra,
+                )
+                return
+            if self._proactive_mode == "shadow":
+                self._log_decision(
+                    stage="proactive",
+                    action="shadow_would_answer",
+                    query=decision.text,
+                    results=results,
+                    extra=extra,
+                )
+                return
+            if self._proactive_mode != "first_ask":
+                self._log_decision(
+                    stage="proactive",
+                    action="suppressed_mode",
+                    query=decision.text,
+                    results=results,
+                    extra=extra,
+                )
+                return
+            await self._send_proactive(event, burst, decision, extra)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.warning("[FeishuQA] 主动答判定失败(已忽略): %s", exc)
+        finally:
+            if self._watch_tasks.get(key) is asyncio.current_task():
+                self._watch_tasks.pop(key, None)
+
+    async def _watch_human_grace(
+        self, event, key: tuple[str, str], extra: dict
+    ) -> None:
+        """@ 真人的提问:宽限期到了还没人接,才以"给个参考"的身份兜底。"""
+        try:
+            await asyncio.sleep(
+                float(self._cfg("PROACTIVE_HUMAN_GRACE_SECONDS", 180))
+            )
+            watch = self._watch
+            planner = self._watch_planner
+            if watch is None or planner is None:
+                return
+            burst = watch.get(*key)
+            if burst is None or burst.answered_entry_id is not None:
+                return
+            if watch.addressed_human_replied(burst):
+                self._log_decision(
+                    stage="proactive",
+                    action="suppressed_human_replied",
+                    query=burst.text,
+                    extra=extra,
+                )
+                return
+            decision = planner.plan(burst)
+            if decision.action != "answer" or decision.result is None:
+                self._log_decision(
+                    stage="proactive",
+                    action="watched_no_answer",
+                    query=burst.text,
+                    extra={**extra, "reason": decision.reason},
+                )
+                return
+            await self._send_proactive(
+                event, burst, decision, {**extra, **self._watch_extra(burst, decision)}
+            )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.warning("[FeishuQA] 真人提问兜底失败(已忽略): %s", exc)
+        finally:
+            if self._watch_grace_tasks.get(key) is asyncio.current_task():
+                self._watch_grace_tasks.pop(key, None)
+
+    async def _send_proactive(self, event, burst, decision, extra: dict) -> None:
+        """真正投递主动答(链接一条 + 必要时的身份说明),并记账。"""
+        watch = self._watch
+        result = decision.result
+        if watch is None or result is None:
+            return
+        now = time.time()
+        allowed, reason = self._watch_limiter.allow(
+            group_id=burst.group_id,
+            sender_id=burst.sender_id,
+            text=decision.text,
+            now=now,
+        )
+        if not allowed:
+            self._log_decision(
+                stage="proactive",
+                action=f"suppressed_{reason}",
+                query=decision.text,
+                results=[result],
+                extra=extra,
+            )
+            return
+        if watch.is_hot(burst.group_id, burst.sender_id, now):
+            self._log_decision(
+                stage="proactive",
+                action="suppressed_hot_chat",
+                query=decision.text,
+                results=[result],
+                extra=extra,
+            )
+            return
+        direct = self._format_links(event, [result.entry])
+        text = direct.text
+        if burst.audience == "human":
+            text = _PROACTIVE_HUMAN_PREFIX + text
+        else:
+            text = _PROACTIVE_GROUP_PREFIX + text
+        payload = DirectAnswer(
+            text=text, image_paths=direct.image_paths, entry_id=direct.entry_id
+        )
+        await self._send_direct(event, payload)
+        watch.mark_answered(burst, result.entry.id, now=now)
+        self._watch_limiter.record(
+            group_id=burst.group_id,
+            sender_id=burst.sender_id,
+            text=decision.text,
+            now=now,
+        )
+        self._log_decision(
+            stage="proactive",
+            action="answer_sent",
+            query=decision.text,
+            results=[result],
+            extra={**extra, "entry": result.entry.id},
+        )
+
+    def _schedule_watch(self, event, burst) -> None:
+        """重启这个发言人的 settle 计时器(新碎片到了就重新等)。"""
+        key = (burst.group_id, burst.sender_id)
+        old = self._watch_tasks.pop(key, None)
+        if old is not None and not old.done():
+            old.cancel()
+        self._watch_tasks[key] = asyncio.create_task(
+            self._watch_after_settle(event, key)
+        )
+
+    def _schedule_human_grace(self, event, key: tuple[str, str], extra: dict) -> None:
+        old = self._watch_grace_tasks.pop(key, None)
+        if old is not None and not old.done():
+            old.cancel()
+        self._watch_grace_tasks[key] = asyncio.create_task(
+            self._watch_human_grace(event, key, extra)
+        )
+
+    def _watch_extra(self, burst, decision) -> dict:
+        return {
+            "mode": self._proactive_mode,
+            "audience": burst.audience,
+            "n_msgs": len(burst.messages),
+            "span_s": round(burst.span, 1),
+            "window": decision.window_size,
+            "reason": decision.reason,
+        }
+
+    @staticmethod
+    def _watch_audience(event) -> tuple[str, set[str], bool]:
+        """这条消息在对谁说:机器人 / 某个真人 / 群里所有人。
+
+        与 AstrBot 的唤醒判定同源(``core/pipeline/waking_check``):@ 机器人
+        或引用机器人 = 对机器人说(交给 Tier-0);@ 别人或引用别人 = 对真人说
+        (走宽限兜底);其余算群内首问。
+        """
+        import astrbot.api.message_components as Comp
+
+        self_id = str(event.get_self_id() or "")
+        targets: set[str] = set()
+        has_image = False
+        bot_addressed = False
+        for comp in event.get_messages() or []:
+            if isinstance(comp, Comp.At):
+                qq = str(getattr(comp, "qq", "") or "")
+                if qq == "all":
+                    targets.add("all")
+                elif qq and qq == self_id:
+                    bot_addressed = True
+                elif qq:
+                    targets.add(qq)
+            elif isinstance(comp, Comp.Reply):
+                sender = str(getattr(comp, "sender_id", "") or "")
+                if sender and sender == self_id:
+                    bot_addressed = True
+                elif sender:
+                    targets.add(sender)
+            elif isinstance(comp, Comp.Image):
+                has_image = True
+        if bot_addressed or event.is_at_or_wake_command:
+            return "bot", targets, has_image
+        if targets:
+            return "human", targets, has_image
+        return "group", targets, has_image
+
+    def _proactive_group_enabled(self, event) -> bool:
+        """主动答的群白名单:空 = 跟随 ENABLED_GROUPS(插件本来就在这些群工作)。"""
+        groups = self._proactive_groups or [
+            str(g) for g in (self._cfg("ENABLED_GROUPS", []) or [])
+        ]
+        if not groups:
+            return False
+        if "*" in groups:
+            return True
+        group_id = str(event.get_group_id() or "")
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        for item in groups:
+            if ":" in item:
+                if umo and item == umo:
+                    return True
+            elif group_id and item == group_id:
+                return True
+        return False
+
+    def _resolve_proactive_mode(self) -> str:
+        raw = str(self._cfg("PROACTIVE_MODE", "shadow") or "shadow").strip().lower()
+        if raw not in _PROACTIVE_MODES:
+            logger.warning("[FeishuQA] 未知 PROACTIVE_MODE=%r,按 off 处理", raw)
+            return "off"
+        return raw
+
 
 
     @filter.llm_tool(name="qa_send_answer")
@@ -1207,9 +1582,12 @@ class FeishuQaPlugin(Star):
         is_qa = bool(event.get_extra("_qa_relevant"))
         if not is_qa:
             # 日常闲聊/普通对话:从 tools 中剥离 qa_send_answer,保持纯净聊天 BOT
-            if hasattr(req, "func_tool") and req.func_tool:
-                if hasattr(req.func_tool, "remove_tool"):
-                    req.func_tool.remove_tool("qa_send_answer")
+            if (
+                hasattr(req, "func_tool")
+                and req.func_tool
+                and hasattr(req.func_tool, "remove_tool")
+            ):
+                req.func_tool.remove_tool("qa_send_answer")
             return
 
         # 确认为业务提问链路:注入 FAQ 引用规范
