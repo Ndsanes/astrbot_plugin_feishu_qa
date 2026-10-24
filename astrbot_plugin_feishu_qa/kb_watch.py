@@ -147,3 +147,17 @@ def status_line(state: dict | None) -> str:
     baseline = state.get("baseline") or {}
     at = baseline.get("at") or state.get("checked_at") or "未知"
     return f"手册 PDF: 已是最新(基线 {at})"
+
+
+def mark_notified(state_path: Path, *, when: str | None = None) -> dict:
+    """标记"这次更新已经通知过",避免每周重复轰炸。
+
+    远端再次变化时 ``evaluate`` 会生成新的 pending(没有 notified_at),
+    因此下一轮仍会通知。
+    """
+    state = load_state(state_path)
+    pending = state.get("pending")
+    if isinstance(pending, dict):
+        pending["notified_at"] = when or utc_now()
+        save_state(state_path, state)
+    return state

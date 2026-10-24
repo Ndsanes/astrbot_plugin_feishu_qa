@@ -211,5 +211,11 @@
     "type": "string",
     "hint": "默认 BandLab 官方托管地址;换版本时无需改配置,换源才需要",
     "default": "https://bandlab.github.io/cakewalk/docs/Cakewalk%20Sonar%20Reference%20Guide.pdf"
+  },
+  "KB_WATCH_NOTIFY_UMO": {
+    "description": "手册有更新时通知谁(UMO)",
+    "type": "string",
+    "hint": "留空 = 只写日志。/sid 或任意消息里可以看到 UMO,例如 default_xxx:FriendMessage:yyy;同一个更新只通知一次",
+    "default": ""
   }
 }

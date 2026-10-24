@@ -67,7 +67,13 @@ from .jev.policy import (
     decide_takeover,
     option_key,
 )
-from .kb_watch import OFFICIAL_PDF_URL, check_once, load_state, status_line
+from .kb_watch import (
+    OFFICIAL_PDF_URL,
+    check_once,
+    load_state,
+    mark_notified,
+    status_line,
+)
 from .learn.candidate import (
     build_learn_prompt,
     candidate_to_pending_record,
@@ -743,6 +749,8 @@ class FeishuQaPlugin(Star):
                         pending.get("bytes"),
                         pending.get("last_modified"),
                     )
+                    if not pending.get("notified_at"):
+                        await self._kb_watch_notify(result)
                 else:
                     logger.info(
                         "[FeishuQA] 手册 PDF 检查: %s", result.get("status")
@@ -752,6 +760,40 @@ class FeishuQaPlugin(Star):
             except Exception as exc:
                 logger.warning("[FeishuQA] 手册 PDF 检查失败(下轮再试): %s", exc)
             await asyncio.sleep(interval)
+
+    async def _kb_watch_notify(self, result: dict) -> bool:
+        """把"手册有更新"推给管理员私聊;同一个更新只通知一次。
+
+        qq_official 的主动消息在 AstrBot 里走 ``send_by_session``(不需要 msg_id),
+        失败只告警,不影响检查本身。
+        """
+        umo = str(self._cfg("KB_WATCH_NOTIFY_UMO", "") or "").strip()
+        if not umo or self.context is None:
+            return False
+        baseline = result.get("baseline") or {}
+        pending = result.get("pending") or {}
+        text = (
+            "【手册更新】Cakewalk Sonar 官方 PDF 可能有更新\n"
+            f"基线: {baseline.get('bytes')} 字节 / {baseline.get('at') or '-'}\n"
+            f"远端: {pending.get('bytes')} 字节 / {pending.get('last_modified') or '-'}\n"
+            "同步: python tools/knowledge/kb_sync.py --all "
+            '--kb-name \"Cakewalk sonar\" --replace'
+        )
+        try:
+            from astrbot.api.event import MessageChain
+
+            sent = await self.context.send_message(
+                umo, MessageChain().message(text)
+            )
+        except Exception as exc:
+            logger.warning("[FeishuQA] 手册更新通知发送失败(下次再试): %s", exc)
+            return False
+        if not sent:
+            logger.warning("[FeishuQA] 手册更新通知未发送(找不到平台会话): %s", umo)
+            return False
+        self._kb_watch = mark_notified(self._kb_watch_state_path())
+        logger.info("[FeishuQA] 手册更新通知已发送: %s", umo)
+        return True
 
     async def _fuuumusic_sync_loop(self) -> None:
         interval = int(self._cfg("FUUUMUSIC_SYNC_INTERVAL_HOURS", 24)) * 3600

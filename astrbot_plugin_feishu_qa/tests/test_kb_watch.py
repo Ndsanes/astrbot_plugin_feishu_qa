@@ -14,6 +14,7 @@ from astrbot_plugin_feishu_qa.kb_watch import (
     check_once,
     evaluate,
     load_state,
+    mark_notified,
     save_state,
     status_line,
 )
@@ -112,3 +113,24 @@ class TestStatusLine:
         state = evaluate({}, _remote())
         state = evaluate(state, _remote())
         assert "已是最新" in status_line(state)
+
+
+class TestMarkNotified:
+    def test_marks_pending_once(self, tmp_path: Path) -> None:
+        path = tmp_path / "kb_watch.json"
+        state = evaluate({}, _remote())
+        state = evaluate(state, _remote(etag="def", size=120))
+        save_state(path, state)
+        marked = mark_notified(path)
+        assert marked["pending"]["notified_at"]
+        # 再标一次不会改变已有时间戳(只覆盖同一次待办)
+        stamp = marked["pending"]["notified_at"]
+        again = mark_notified(path, when="later")
+        assert again["pending"]["notified_at"] == "later" != stamp
+
+    def test_no_pending_noop(self, tmp_path: Path) -> None:
+        path = tmp_path / "kb_watch.json"
+        save_state(path, evaluate({}, _remote()))
+        state = mark_notified(path)
+        assert "pending" not in state or state.get("pending") is None
+

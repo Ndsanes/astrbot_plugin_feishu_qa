@@ -479,6 +479,81 @@ class TestAdminCommands:
         assert "有更新待同步" in outs[0][1]
 
 
+class TestKbWatchNotify:
+    """手册有更新时推给管理员私聊(UMO 可配);同一更新只推一次。"""
+
+    class _Ctx:
+        def __init__(self, ok: bool = True) -> None:
+            self.ok = ok
+            self.sent: list = []
+
+        async def send_message(self, umo, chain):
+            self.sent.append((umo, chain))
+            return self.ok
+
+    def _result(self):
+        from astrbot_plugin_feishu_qa.kb_watch import RemoteInfo, evaluate
+
+        base = evaluate({}, RemoteInfo("u", 10, "a", "t1"))
+        changed = evaluate(base, RemoteInfo("u", 20, "b", "Sat, 24 Oct 2026"))
+        return changed
+
+    def test_sends_to_configured_umo(self, plugin: FeishuQaPlugin) -> None:
+        import asyncio
+
+        from astrbot_plugin_feishu_qa.kb_watch import save_state
+
+        state = self._result()
+        save_state(plugin._kb_watch_state_path(), state)
+        plugin.context = self._Ctx()
+        plugin.config["KB_WATCH_NOTIFY_UMO"] = "default_1903893532:FriendMessage:3B0CE753"
+        ok = asyncio.run(
+            plugin._kb_watch_notify(
+                {"baseline": state["baseline"], "pending": state["pending"]}
+            )
+        )
+        assert ok is True
+        umo, chain = plugin.context.sent[0]
+        assert umo == "default_1903893532:FriendMessage:3B0CE753"
+        assert "手册更新" in str(chain.chain)
+        # 发送成功后 pending 打上 notified_at
+        saved = plugin._kb_watch_state_path().read_text()
+        assert "notified_at" in saved
+
+    def test_no_umo_is_noop(self, plugin: FeishuQaPlugin) -> None:
+        import asyncio
+
+        plugin.context = self._Ctx()
+        plugin.config["KB_WATCH_NOTIFY_UMO"] = ""
+        state = self._result()
+        ok = asyncio.run(
+            plugin._kb_watch_notify(
+                {"baseline": state["baseline"], "pending": state["pending"]}
+            )
+        )
+        assert ok is False
+        assert plugin.context.sent == []
+
+    def test_send_failure_does_not_mark(self, plugin: FeishuQaPlugin) -> None:
+        import asyncio
+
+        from astrbot_plugin_feishu_qa.kb_watch import RemoteInfo, evaluate, save_state
+
+        state = evaluate(
+            evaluate({}, RemoteInfo("u", 10, "a", "t1")), RemoteInfo("u", 20, "b", "t2")
+        )
+        save_state(plugin._kb_watch_state_path(), state)
+        plugin.context = self._Ctx(ok=False)
+        plugin.config["KB_WATCH_NOTIFY_UMO"] = "x:y:z"
+        ok = asyncio.run(
+            plugin._kb_watch_notify(
+                {"baseline": state["baseline"], "pending": state["pending"]}
+            )
+        )
+        assert ok is False
+        assert "notified_at" not in plugin._kb_watch_state_path().read_text()
+
+
 class TestMergedForwardCapability:
     """合并转发能力探测(Phase 4):qq_official 排除,其余放行由构建失败兜底。"""
 
