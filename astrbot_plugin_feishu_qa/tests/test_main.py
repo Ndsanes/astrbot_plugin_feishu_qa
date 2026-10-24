@@ -470,6 +470,14 @@ class TestAdminCommands:
         text = outs[0][1]
         assert "revision: 8268" in text
 
+    def test_status_shows_manual_watch(self, plugin: FeishuQaPlugin) -> None:
+        from astrbot_plugin_feishu_qa.kb_watch import RemoteInfo, evaluate
+
+        base = evaluate({}, RemoteInfo("u", 10, "abc", "t1"))
+        plugin._kb_watch = evaluate(base, RemoteInfo("u", 20, "def", "t2"))
+        outs = run_handler(plugin.qa_status(AstrMessageEvent(sender_id="admin1")))
+        assert "有更新待同步" in outs[0][1]
+
 
 class TestMergedForwardCapability:
     """合并转发能力探测(Phase 4):qq_official 排除,其余放行由构建失败兜底。"""

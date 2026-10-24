@@ -193,5 +193,23 @@
     "type": "int",
     "hint": "同一人连续追问时避免连发;0 = 不限",
     "default": 2
+  },
+  "KB_WATCH_ENABLED": {
+    "description": "每周检查官方手册 PDF 是否有更新",
+    "type": "bool",
+    "hint": "只检查不重建:发现更新会写 WARNING 日志并在 /qa_status 显示;重建在装了 pymupdf 的环境跑 tools/knowledge/kb_sync.py",
+    "default": true
+  },
+  "KB_WATCH_INTERVAL_HOURS": {
+    "description": "官方手册 PDF 检查间隔(小时)",
+    "type": "int",
+    "hint": "默认 168 = 每周一次;0 = 关闭",
+    "default": 168
+  },
+  "KB_WATCH_PDF_URL": {
+    "description": "官方手册 PDF 地址",
+    "type": "string",
+    "hint": "默认 BandLab 官方托管地址;换版本时无需改配置,换源才需要",
+    "default": "https://bandlab.github.io/cakewalk/docs/Cakewalk%20Sonar%20Reference%20Guide.pdf"
   }
 }

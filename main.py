@@ -67,6 +67,7 @@ from .jev.policy import (
     decide_takeover,
     option_key,
 )
+from .kb_watch import OFFICIAL_PDF_URL, check_once, load_state, status_line
 from .learn.candidate import (
     build_learn_prompt,
     candidate_to_pending_record,
@@ -129,7 +130,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.13",
+    "0.9.14",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -180,6 +181,10 @@ class FeishuQaPlugin(Star):
         )
         self._watch_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self._watch_grace_tasks: dict[tuple[str, str], asyncio.Task] = {}
+
+        # 官方手册 PDF 的每周更新检查(只查不建;重建在 tools/knowledge 里)。
+        self._kb_watch = load_state(self._kb_watch_state_path())
+        self._kb_watch_task: asyncio.Task | None = None
 
         # Jev 决策模型:只在拿到 key 时构造。未配置 / 构造失败一律 None,
         # 两个接管点见到 None 就走原本的本地判定,行为与未接入时完全一致。
@@ -642,6 +647,8 @@ class FeishuQaPlugin(Star):
             self._sync_task = asyncio.create_task(self._sync_loop())
         if bool(self._cfg("FUUUMUSIC_ENABLED", True)):
             self._fuuumusic_task = asyncio.create_task(self._fuuumusic_sync_loop())
+        if bool(self._cfg("KB_WATCH_ENABLED", True)):
+            self._kb_watch_task = asyncio.create_task(self._kb_watch_loop())
         if bool(self._cfg("JEV_SELFTEST_ON_LOAD", True)):
             # 同步执行:管理员在日志里立刻能看到 key/网络是否通,而不是等首问
             self._jev_selfcheck()
@@ -679,7 +686,11 @@ class FeishuQaPlugin(Star):
             logger.warning("[FeishuQA] 快照迁移失败(不影响问答): %s", exc)
 
     async def terminate(self) -> None:
-        for task in (self._sync_task, getattr(self, "_fuuumusic_task", None)):
+        for task in (
+            self._sync_task,
+            getattr(self, "_fuuumusic_task", None),
+            getattr(self, "_kb_watch_task", None),
+        ):
             if task:
                 task.cancel()
         for task in list(self._watch_tasks.values()) + list(self._watch_grace_tasks.values()):
@@ -698,6 +709,48 @@ class FeishuQaPlugin(Star):
                 raise
             except Exception as exc:
                 logger.warning("[FeishuQA] 同步失败(旧语料继续服务): %s", exc)
+            await asyncio.sleep(interval)
+
+    def _kb_watch_state_path(self) -> Path:
+        return self.data_root / "kb_watch.json"
+
+    async def _kb_watch_loop(self) -> None:
+        """每周 HEAD 一次官方手册 PDF,有变化就告警(只查不建)。
+
+        重建需要 pymupdf + tools/knowledge 流水线,放在运维侧执行;插件只负责
+        在服务器上盯着官方文件,避免"开发机没开机就永远不知道更新了"。
+        """
+        interval = int(self._cfg("KB_WATCH_INTERVAL_HOURS", 168)) * 3600
+        if interval <= 0:
+            return
+        url = str(self._cfg("KB_WATCH_PDF_URL", OFFICIAL_PDF_URL) or OFFICIAL_PDF_URL)
+        await asyncio.sleep(120)  # 启动后稍等,别和同步任务抢带宽
+        while True:
+            try:
+                result = await asyncio.to_thread(
+                    check_once, self._kb_watch_state_path(), url
+                )
+                self._kb_watch = load_state(self._kb_watch_state_path())
+                if result.get("status") == "update_available":
+                    baseline = result.get("baseline") or {}
+                    pending = result.get("pending") or {}
+                    logger.warning(
+                        "[FeishuQA] 官方手册 PDF 有更新(基线 %s 字节 / %s → 远端 %s 字节 / %s)。"
+                        "在装了 pymupdf 的环境执行: python tools/knowledge/kb_sync.py "
+                        "--all --kb-name \"Cakewalk sonar\" --replace",
+                        baseline.get("bytes"),
+                        baseline.get("at"),
+                        pending.get("bytes"),
+                        pending.get("last_modified"),
+                    )
+                else:
+                    logger.info(
+                        "[FeishuQA] 手册 PDF 检查: %s", result.get("status")
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("[FeishuQA] 手册 PDF 检查失败(下轮再试): %s", exc)
             await asyncio.sleep(interval)
 
     async def _fuuumusic_sync_loop(self) -> None:
@@ -1618,6 +1671,7 @@ class FeishuQaPlugin(Star):
             f"QA 条目: {manifest.get('entry_count', 0)}",
             f"图片数量: {manifest.get('image_count', 0)}",
             f"最后构建: {manifest.get('built_at', '无')}",
+            status_line(self._kb_watch),
         ]
         yield event.plain_result("\n".join(lines))
 

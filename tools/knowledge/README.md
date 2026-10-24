@@ -78,10 +78,21 @@ python tools/knowledge/kb_sync.py --upload --dry-run   # 只生成 payload
 - 退出码:`0` 最新/成功、`2` 有更新、`3` 缺基线(先 `--build --force`)、
   `1` 出错。cron 可以据此决定是否继续。
 
-每天自动跑一次(API Key 30 天过期,过期后 `--check` 仍可用,上传会失败):
+### 每周检查由插件负责,重建仍在这里
+
+**检查**已经内置在插件里(`KB_WATCH_ENABLED`,默认每周一次):机器人服务器
+每周 HEAD 官方 PDF,ETag/大小变了就写 WARNING,并在 `/qa_status` 显示
+"手册 PDF: 有更新待同步"。它只查不建,所以不需要 pymupdf,也不会因为开发机
+关机而漏掉——看到告警后再跑一次 `kb_sync.py` 即可(或者把重建也交给常开机
+器的 cron,见下)。
+
+插件里的基线**只在 `kb_sync.py` 重建成功后推进**,不会"看到了但没同步"就
+不再提醒。
+
+如果想让**重建**也自动(需要 pymupdf 与可用的 API Key),再选一台常开机器:
 
 ```cron
-0 5 * * * cd <repo> && .venv/bin/python tools/knowledge/kb_sync.py \
+0 5 * * 1 cd <repo> && .venv/bin/python tools/knowledge/kb_sync.py \
     --all --kb-name "Cakewalk sonar" --replace >> output/cakewalk/sync.log 2>&1
 ```
 
