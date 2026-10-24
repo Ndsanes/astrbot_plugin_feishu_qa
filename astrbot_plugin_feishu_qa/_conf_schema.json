@@ -194,6 +194,30 @@
     "hint": "同一人连续追问时避免连发;0 = 不限",
     "default": 2
   },
+  "PROACTIVE_MIN_SCORE": {
+    "description": "主动答专用分数线",
+    "type": "float",
+    "hint": "0 = 跟随直答阈值(推荐:实测真实提问与误命中分数重叠,硬抬只会砍真问题);想更保守可填 12 以上",
+    "default": 0.0
+  },
+  "PROACTIVE_OWNER_IDS": {
+    "description": "被 @ 时算「主理人/群主」的用户 ID",
+    "type": "list",
+    "hint": "填 QQ 号或 UID;只有 @ 到这些人时才说「<称谓>可能还没看到」,其余 @ 用中性说法。留空 = 从不点名",
+    "default": []
+  },
+  "PROACTIVE_OWNER_LABEL": {
+    "description": "主理人的称呼(用于 @ 兜底时的第一行)",
+    "type": "string",
+    "hint": "例如「肖闻姐姐」→「肖闻姐姐可能还没看到,先给你一份参考:」",
+    "default": "肖闻姐姐"
+  },
+  "PROACTIVE_OWNER_ONLY": {
+    "description": "只在 @ 到主理人时才兜底",
+    "type": "bool",
+    "hint": "开(默认)=只有 @ 到「主理人 ID」里的人才在宽限后补一句;关=@ 任何成员都兜底。名单为空时保持关闭兜底",
+    "default": true
+  },
   "KB_WATCH_ENABLED": {
     "description": "每周检查官方手册 PDF 是否有更新",
     "type": "bool",

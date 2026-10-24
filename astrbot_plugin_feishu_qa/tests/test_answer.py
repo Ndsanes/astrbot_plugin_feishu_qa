@@ -125,10 +125,92 @@ class TestMiss:
         assert plan.kind == "miss"
 
 
+class TestProactiveHintFormat:
+    """主动答版式:两行,越短越好(2026-10-24 收敛)。"""
+
+    def _entry(self, env):
+        return env["parsed"].entries[0]
+
+    def test_markdown_two_lines(self, env) -> None:
+        from astrbot_plugin_feishu_qa.answer.direct import (
+            PROACTIVE_HINT_HEADER,
+            format_proactive_hint,
+        )
+        from astrbot_plugin_feishu_qa.corpus.model import normalize_title
+
+        entry = self._entry(env)
+        answer = format_proactive_hint(
+            entry, url_of=lambda e: "https://x/y#q1", markdown=True
+        )
+        title = normalize_title(entry.title)
+        assert answer.text == f"{PROACTIVE_HINT_HEADER}\n- [{title}](https://x/y#q1)"
+        assert "【" not in answer.text, "症状标签与标题重复,主动答里不再重复一遍"
+        assert answer.image_paths == []
+        assert answer.entry_id == entry.id
+
+    def test_plain_fallback_for_other_platforms(self, env) -> None:
+        from astrbot_plugin_feishu_qa.answer.direct import format_proactive_hint
+
+        entry = self._entry(env)
+        text = format_proactive_hint(
+            entry, url_of=lambda e: "https://x/y#q1", markdown=False
+        ).text
+        assert text.count("\n") == 1, "只该有两行"
+        assert text.splitlines()[1].startswith("- ")
+        assert "👉 https://x/y#q1" in text
+        assert "来源" not in text
+
+    def test_ordinal_stripped(self, env) -> None:
+        from astrbot_plugin_feishu_qa.answer.direct import format_proactive_hint
+
+        entry = self._entry(env)
+        text = format_proactive_hint(
+            entry, url_of=lambda e: "u", markdown=True, lead="X"
+        ).text
+        assert "1、" not in text and "2.1、" not in text
+
+
+class TestIntentGate:
+    """线上误答的回归:分数够高,但问的是语料答不了的那类问题。"""
+
+    @staticmethod
+    def _retriever() -> Retriever:
+        """复刻线上那条把「键盘」当证据的条目(症状标签含双字泛名词)。"""
+        from astrbot_plugin_feishu_qa.corpus.model import QaEntry
+
+        entry = QaEntry(
+            id="qa_midi_keyboard",
+            section_path=["如何连接设备"],
+            category="如何连接设备",
+            symptom_tags=["MIDI键盘", "电子琴", "键盘", "键盘连不上"],
+            title="连接 USB MIDI 键盘",
+            raw_title="连接 USB MIDI 键盘",
+            body="把键盘用 USB 线连到电脑,在偏好设置里选择 MIDI 输入设备。",
+            source="fuuumusic",
+        )
+        # 阈值压低,让这条在"没有闸门时"确实会被直答——否则测不出闸门的作用
+        return Retriever([entry], high_threshold=2.0, medium_threshold=1.0)
+
+    def test_high_score_purchase_question_is_refused(self) -> None:
+        router = AnswerRouter(self._retriever(), enabled_groups=["*"])
+        plan = router.route("脑袋，键盘和鼠标推荐哪些？", group_id="1")
+        # 不承接:既不是 direct,也不是 miss(后者会放行主 Agent 代答)
+        assert plan.kind == "refused"
+        assert plan.note == "intent:purchase_advice"
+        assert plan.candidates, "cands 要保留，日志才能看出「差点答出去哪一条」"
+        assert plan.candidates[0].confidence == "HIGH", "没有闸门时这条会被直答"
+
+    def test_same_words_as_troubleshooting_still_answers(self) -> None:
+        router = AnswerRouter(self._retriever(), enabled_groups=["*"])
+        plan = router.route("键盘连不上电脑", group_id="1")
+        assert plan.kind == "direct"
+        assert plan.note == ""
+
+
 class TestMetricsContract:
     def test_plan_kinds_are_finite_set(self, env) -> None:
         router = AnswerRouter(env["retriever"], store=env["store"], enabled_groups=["*"])
-        allowed = {"denied", "direct", "miss"}
-        for query in ("没声音", "天气怎么样", ""):
+        allowed = {"denied", "refused", "direct", "tentative", "miss"}
+        for query in ("没声音", "天气怎么样", "", "键盘鼠标推荐哪个牌子"):
             plan = router.route(query, group_id="g")
             assert plan.kind in allowed

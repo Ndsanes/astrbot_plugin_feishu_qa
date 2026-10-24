@@ -126,6 +126,94 @@ class TestGroupWakeListener:
         assert event.get_extra("_qa_relevant") is False, "日常寒暄 ping! 必须标记为非 QA 业务提问"
 
 
+class TestDecisionObservability:
+    """每次判定都要在平台日志里留一行(2026-10-24 线上复盘:2.5 小时零日志)。"""
+
+    def test_decision_emits_info_line(self, plugin: FeishuQaPlugin, caplog) -> None:
+        import logging
+
+        with caplog.at_level(logging.INFO):
+            plugin._log_decision(
+                stage="route", action="miss_intent", query="键盘和鼠标推荐哪些"
+            )
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert "判定 stage=route action=miss_intent" in logged
+
+    def test_decision_line_carries_score_and_confidence(
+        self, plugin: FeishuQaPlugin, caplog
+    ) -> None:
+        import logging
+
+        results = plugin._retriever.search("声卡设置没问题但是cakewalk就是没声音", top_k=1)
+        assert results
+        with caplog.at_level(logging.INFO):
+            plugin._log_decision(
+                stage="route", action="direct", query="没声音", results=results
+            )
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert f"score={results[0].score:.2f}" in logged
+        assert results[0].confidence in logged
+
+    def test_status_exposes_recent_decisions(self, plugin: FeishuQaPlugin) -> None:
+        import asyncio
+
+        plugin._log_decision(
+            stage="route",
+            action="miss_intent",
+            query="求推荐一个声卡",
+            extra={"intent": "purchase_advice"},
+        )
+        data = asyncio.run(plugin._page_status())
+        recent = data["recent_decisions"]
+        assert recent, "状态页必须能回读最近判定"
+        assert recent[0]["action"] == "miss_intent"
+        assert recent[0]["query"]
+        assert recent[0]["reason"] == "purchase_advice"
+
+
+class TestIntentGateInGroup:
+    """不承接的提问:只回一句范围说明,并且拦住主 Agent。
+
+    拦的不是"说话",而是"给出答案":主 Agent 一旦接手,就会拿自己的知识编一份
+    推荐——那和撞文档一样是错答。
+    """
+
+    def test_purchase_question_only_gets_scope_line(
+        self, plugin: FeishuQaPlugin
+    ) -> None:
+        event = AstrMessageEvent(message_str="@bot 键盘和鼠标推荐哪些？", group_id="g1")
+        event.is_at_or_wake_command = True
+        event._platform_name = "qq_official"  # 走普通消息路径,便于断言文本
+        run_handler(plugin.on_group_message(event))
+        assert len(event.sent) == 1, "应该只有一条范围说明"
+        sent = " ".join(str(part) for part in event.sent[0].chain)
+        assert "不接" in sent and "Cakewalk" in sent
+        assert "USB MIDI 键盘" not in sent, "不许带任何正确答案/条目链接"
+        assert event.is_stopped(), "必须阻断主 Agent，否则它会替我们编一份推荐"
+        assert event.get_extra("_qa_relevant") is False
+
+    def test_suppression_is_logged(self, plugin: FeishuQaPlugin, caplog) -> None:
+        import logging
+
+        event = AstrMessageEvent(message_str="@bot 求推荐一个便宜声卡", group_id="g1")
+        event.is_at_or_wake_command = True
+        with caplog.at_level(logging.INFO):
+            run_handler(plugin.on_group_message(event))
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert "action=suppressed_intent" in logged
+        assert "purchase_advice" in logged
+
+    def test_ask_command_explains_scope_without_answering(
+        self, plugin: FeishuQaPlugin
+    ) -> None:
+        event = AstrMessageEvent(message_str="/问 键盘和鼠标推荐哪些？", group_id="g1")
+        event.is_at_or_wake_command = True
+        outs = run_handler(plugin.ask(event))
+        joined = " ".join(str(o) for o in outs)
+        assert "目前不接" in joined
+        assert "连接 USB MIDI 键盘" not in joined
+
+
 class TestFaqCitationGuidance:
     """on_llm_request 钩子:FAQ 出处引用规范注入。"""
 
@@ -1464,8 +1552,14 @@ class TestProactiveWatch:
         await _drain(plugin)
         assert event.sent, "first_ask 应该投递链接"
         text = _sent_text(event)
-        assert "以下章节与你的问题相关" in text
-        assert "没有自带模板" in text
+        # 2026-10-24 收敛版式:一句询问 + 一条链接,不再堆说明与署名
+        lines = text.splitlines()
+        assert lines[0] == "是要问这个嘛？"
+        assert len(lines) == 2, f"主动答只该占两行: {text!r}"
+        assert lines[1].startswith("- ")
+        assert "没有自带的模板" in lines[1]
+        assert "以下章节与你的问题相关" not in text
+        assert "来源" not in text
 
     async def test_hot_chat_suppresses(self, tmp_path, monkeypatch) -> None:
         from astrbot_plugin_feishu_qa.group_watch import WatchMessage
@@ -1545,9 +1639,183 @@ class TestProactiveWatch:
             PROACTIVE_MODE="human_only",
             PROACTIVE_SETTLE_SECONDS=0,
             PROACTIVE_HUMAN_GRACE_SECONDS=0,
+            PROACTIVE_OWNER_IDS=["owner"],
         )
         event = _group_event("cakewalk 没有自带模板怎么办", messages=[At(qq="owner")])
         await plugin.watch_group_chat(event)
         await _drain(plugin)
         assert event.sent, "没人回应时应该兜底"
-        assert "群主可能还没看到" in _sent_text(event)
+        assert "肖闻姐姐可能还没看到" in _sent_text(event)
+
+    async def test_at_someone_else_uses_neutral_lead(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """@ 的不是主理人时不许点名——代码根本不知道被 @ 的是谁。"""
+        from astrbot.api.message_components import At
+
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+            PROACTIVE_OWNER_IDS=["owner"],
+            PROACTIVE_OWNER_ONLY=False,
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办", messages=[At(qq="someone")])
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert event.sent
+        text = _sent_text(event)
+        assert text.startswith("可能还没看到")
+        assert "肖闻姐姐" not in text
+
+    async def test_without_owner_list_nobody_is_named(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from astrbot.api.message_components import At
+
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+            PROACTIVE_OWNER_ONLY=False,
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办", messages=[At(qq="owner")])
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert _sent_text(event).startswith("可能还没看到")
+
+    async def test_qq_official_mention_without_at_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """qq_official 的 @ 别人只留在 message_str 里,没有 At 分量。
+
+        线上那条消息就是这个形态:``<@!520A98F0...> 问题``。只认 At 分量的话
+        这个平台上「有人 @ 真人」永远看不见,human_only 模式整个失效。
+        """
+        uid = "520A98F0254E0A7D6E8ECD4375D134C4"
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+            PROACTIVE_OWNER_IDS=[uid],
+        )
+        event = _group_event(
+            f"<@!{uid}> cakewalk 没有自带模板怎么办", messages=[]
+        )
+        event._platform_name = "qq_official"
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert event.sent, "@ 到主理人时应该兜底"
+        text = _sent_text(event)
+        assert text.startswith("肖闻姐姐可能还没看到")
+        assert "没有自带的模板" in text
+        assert "<@" not in text, "@ 标记不许漏进消息或检索词"
+
+    async def test_qq_official_mention_of_stranger_is_neutral(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        uid = "520A98F0254E0A7D6E8ECD4375D134C4"
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+            PROACTIVE_OWNER_IDS=[uid],
+            PROACTIVE_OWNER_ONLY=False,
+        )
+        event = _group_event(
+            "<@!FFFF0000FFFF0000FFFF0000FFFF0000> cakewalk 没有自带模板怎么办"
+        )
+        event._platform_name = "qq_official"
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert _sent_text(event).startswith("可能还没看到")
+
+    async def test_bot_mention_does_not_count_as_human(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """@ 机器人自己不算"在问某个真人"。"""
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+        )
+        event = _group_event("<@!10000> cakewalk 没有自带模板怎么办")
+        event.is_at_or_wake_command = True
+        event._platform_name = "qq_official"
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        # 交给 Tier-0 处理,@ 机器人不触发真人兜底
+        assert not event.sent
+
+    async def test_owner_only_is_default_and_blocks_strangers(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """默认只对主理人兜底:名单为空时,@ 谁都不该开口。
+
+        这条路径在 qq_official 上此前压根没被触发过(见"没有 At 分量"那条
+        用例),修好之后就会变成"@ 任何人都补一句"——所以默认必须是窄的。
+        """
+        from astrbot.api.message_components import At
+
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办", messages=[At(qq="someone")])
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert not event.sent, "名单为空时不该兜底"
+        log = (plugin.data_root / "decisions.jsonl").read_text()
+        assert "suppressed_not_owner" in log
+
+    async def test_owner_only_lets_owner_through(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from astrbot.api.message_components import At
+
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+            PROACTIVE_OWNER_IDS=["owner"],
+            PROACTIVE_OWNER_ONLY=True,
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办", messages=[At(qq="owner")])
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert event.sent
+        assert _sent_text(event).startswith("肖闻姐姐可能还没看到")
+
+    async def test_owner_label_is_configurable(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from astrbot.api.message_components import At
+
+        plugin = _watch_plugin(
+            tmp_path,
+            monkeypatch,
+            PROACTIVE_MODE="human_only",
+            PROACTIVE_SETTLE_SECONDS=0,
+            PROACTIVE_HUMAN_GRACE_SECONDS=0,
+            PROACTIVE_OWNER_IDS=["owner"],
+            PROACTIVE_OWNER_LABEL="老肖",
+        )
+        event = _group_event("cakewalk 没有自带模板怎么办", messages=[At(qq="owner")])
+        await plugin.watch_group_chat(event)
+        await _drain(plugin)
+        assert _sent_text(event).startswith("老肖可能还没看到")

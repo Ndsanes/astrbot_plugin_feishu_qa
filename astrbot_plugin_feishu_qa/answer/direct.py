@@ -23,6 +23,13 @@ SOURCE_ATTRIBUTION_MIXED = "来源:肖闻 Xiaowenn 的 Cakewalk Sonar 中文资�
 # 闸门管安全,文案管表达。
 LINK_LIST_HEADER = "以下章节与你的问题相关:"
 
+# 主动答的版式:两条就够。主动开口占的是别人的屏幕,越短越好——它不是"答案",
+# 只是在问一句"你要找的是这个吗",把链接递过去即可。
+# 版式(2026-10-24 收敛):
+#     是要问这个嘛?
+#     - [介绍](链接)
+PROACTIVE_HINT_HEADER = "是要问这个嘛？"
+
 
 @dataclass
 class DirectAnswer:
@@ -131,3 +138,33 @@ def format_link_list(
         entry_id=entries[0].id,
     )
 
+
+def format_proactive_hint(
+    entry: QaEntry,
+    *,
+    url_of,
+    markdown: bool,
+    lead: str = PROACTIVE_HINT_HEADER,
+) -> DirectAnswer:
+    """主动答的紧凑版式:一句询问 + 一条链接。
+
+    与 ``format_link_list`` 的区别是**故意不带**头部说明与来源署名:主动答
+    没有经过提问者许可就出现在群里,占屏成本比信息完整更重要。标题用
+    ``entry.title``(已去掉【症状标签】)再走 ``normalize_title`` 去序号——
+    标签与标题多半重复,留着只是多占几个字。
+
+    ``markdown`` 与链接列表同源:qq_official 渲染 markdown,其余平台走
+    "标题👉 URL" 的纯文本形态。
+    """
+    title = normalize_title(entry.title or entry.raw_title)
+    url = url_of(entry)
+    if markdown:
+        safe_title = title.replace("[", "［").replace("]", "］")
+        line = f"- [{safe_title}]({url})"
+    else:
+        line = f"- {title}👉 {url}"
+    return DirectAnswer(
+        text=f"{lead}\n{line}",
+        image_paths=[],
+        entry_id=entry.id,
+    )

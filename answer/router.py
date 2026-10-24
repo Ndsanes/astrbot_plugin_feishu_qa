@@ -8,6 +8,7 @@ from ..corpus.model import QaEntry
 from ..retrieval.scorer import Confidence, Retriever, SearchResult
 from ..storage.snapshot import SnapshotStore
 from .direct import DirectAnswer, format_direct_answer
+from .intent import check_intent
 
 
 @dataclass
@@ -16,6 +17,10 @@ class AnswerPlan:
 
     kind:
       - "denied":    白名单外,零响应(不应产生任何消息)
+      - "refused":   不承接的提问(选购/推荐/议价)。**零响应**:既不由 Tier-0
+                      回答,也不放行主 Agent。原因见 ``note``。2026-10-24 明确
+                      的产品边界:推荐类能力(Modu)还没接进来,这类问题没有
+                      可靠答案,答一句不如不答。
       - "direct":    高置信原文直答(0 LLM)
       - "tentative": 命中 MEDIUM 区:证据不足以下断言,但可能相关。**是否真的
                       投递由调用方按 TENTATIVE_ANSWER_ENABLED 决定**,本层
@@ -30,6 +35,9 @@ class AnswerPlan:
     direct: DirectAnswer | None = None
     score: float = 0.0
     candidates: list[SearchResult] = field(default_factory=list)
+    # 判定附注:为空表示"按分数如实分级"。``intent:<reason>`` 表示分数够高但
+    # 提问意图不在语料/能力范围内(选购/议价…)——此时 kind 为 "refused"。
+    note: str = ""
 
 
 class AnswerRouter:
@@ -71,6 +79,18 @@ class AnswerRouter:
             return AnswerPlan(kind="denied")
 
         results: list[SearchResult] = self.retriever.search(query, top_k=top_k)
+
+        # 意图闸门先于分数:分数高只说明"撞上了词",不说明"这话我们答得了"。
+        # 保留 candidates 落日志,便于复盘"如果没拦会答哪条"。
+        verdict = check_intent(query)
+        if verdict.blocked:
+            return AnswerPlan(
+                kind="refused",
+                score=results[0].score if results else 0.0,
+                candidates=results,
+                note=f"intent:{verdict.reason}",
+            )
+
         if not results:
             return AnswerPlan(kind="miss")
 

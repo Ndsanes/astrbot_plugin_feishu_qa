@@ -30,18 +30,18 @@ Key flow points an editor must preserve:
 1. **Sync failure ≠ broken Q&A.** `SnapshotStore` writes to `.staging/`, then atomically swaps `corpus.json`. On load failure or sync exception, the old in-memory corpus keeps serving (`main.py` `_load_corpus` returns False and keeps old entries).
 2. **Stable entry IDs are content-derived**, not Feishu block IDs. Feishu regenerates all block IDs on any structural edit, so `corpus/model.py::derive_entry_id` uses `sha256(normalized_section + "|" + ordinal-stripped_title)[:16]` → `qa_<hex>`. `source_locator` is metadata only.
 3. **Images are downloaded by `file_token` to disk** before sending (Feishu temp URLs don't work on QQ). A single image download failure is logged, never fatal.
-4. **Confidence routing** lives in `answer/router.py`: whitelist gate first (`denied` = zero response), then top-1 score vs `HIGH_CONFIDENCE_THRESHOLD` (direct) / `MEDIUM_CONFIDENCE_THRESHOLD` (agent tool) / below (miss text). All zero-LLM except the agent path.
+4. **Confidence routing** lives in `answer/router.py`: whitelist gate first (`denied` = zero response), then the **intent gate** (`answer/intent.py`: 选购/推荐/议价/挑设备类提问 → `refused`, 只回一句范围说明并 `stop_event()` 拦住主 Agent——Modu 推荐能力未接入，这类问题不给答案、也不许大模型代答; 四级信号=硬选购／软求建议(故障词可豁免)／选择句式／器材词+评价句式，两侧清单在 `tests/test_intent.py`), then top-1 score vs `HIGH_CONFIDENCE_THRESHOLD` (direct) / `MEDIUM_CONFIDENCE_THRESHOLD` (agent tool) / below (miss text). All zero-LLM except the agent path.
 5. **Retrieval content injected into the agent goes through `extra_user_content_parts`**, never into the system prompt (keeps prompt cache intact).
 6. **多来源语料分片**:`corpus.json` 是**派生视图**,由 `corpus_sources/<source>.json` 全部分片经 `merge_manifests` 重算。任何一个来源的同步**只能写自己的分片**,不得直接 `commit` 到 `corpus.json` — 否则两个来源会每轮同步互相覆盖(2026-10-07 线上事故:飞书 47 条与网页 76 条轮流消失)。合并按 entry ID 去重、飞书优先(网页 FAQ 段是飞书文档的镜像,同章节+同标题 → 同 ID)。条目 `source` 字段决定直达链接与署名的生成方式(飞书拼块锚点、网页用其自身 URL)。
 
 ## Key Directories
 
-- `pages/feishu_qa/` + `.astrbot-plugin/i18n/` — 插件可视化页面(WebUI Plugin Pages):**完整设置页**(37 项按场景分组、开关/下拉/标签/数字框,标出需重载项)+ 语料状态 + 手册检查。后端经 `context.register_web_api` 挂 `/api/plug/astrbot_plugin_feishu_qa/{settings,status,fuuumusic/sections,kb_watch/check,reload}`;`POST settings` 只接受 schema 内键、服务端校验类型/范围/枚举、只合并变更键;旧版 AstrBot 无 `astrbot.api.web` 时自动跳过
+- `pages/feishu_qa/` + `.astrbot-plugin/i18n/` — 插件可视化页面(WebUI Plugin Pages):**完整设置页**(41 项按场景分组、开关/下拉/标签/数字框,标出需重载项)+ 语料状态 + **最近判定**(回读 decisions.jsonl 最后 12 条)+ 手册检查。后端经 `context.register_web_api` 挂 `/api/plug/astrbot_plugin_feishu_qa/{settings,status,fuuumusic/sections,kb_watch/check,reload}`;`POST settings` 只接受 schema 内键、服务端校验类型/范围/枚举、只合并变更键;旧版 AstrBot 无 `astrbot.api.web` 时自动跳过
 - `astrbot_plugin_feishu_qa/main.py` — plugin entry: commands (`/问`, `/qa_status`, `/kb_watch`, `/qa_sync`, `/qa_reload`, `/learn ok|no`), message handlers, tool registration, background sync/auth tasks
 - `astrbot_plugin_feishu_qa/adapter/` — `gateway.py`（`GatewayClient`，对平台网关公开方法的薄封装；resolver 每次调用时解析，天然支持适配器晚启动）
 - `astrbot_plugin_feishu_qa/corpus/` — `model.py` (dataclasses `QaEntry`/`QaImage`, ID derivation), `parser.py` (doc XML → entries), `builder.py` (manifest build/diff/content hash)
 - `astrbot_plugin_feishu_qa/retrieval/scorer.py` — deterministic `Retriever`, `Confidence` levels
-- `astrbot_plugin_feishu_qa/answer/` — `router.py` (whitelist + confidence routing, pure logic), `direct.py` (direct-answer formatting)
+- `astrbot_plugin_feishu_qa/answer/` — `router.py` (whitelist + intent + confidence routing, pure logic), `intent.py` (选购/议价类提问的确定性闸门 → `refused`), `direct.py` (direct-answer formatting)
 - `astrbot_plugin_feishu_qa/group_watch.py` — 群消息旁听/主动答的纯逻辑:`GroupWatcher` 按「同一发言人 + 无实质插话 + ≤10 分钟 + ≤8 条」拼 burst(碎片提问),`candidate_windows` 取全部连续子窗口,`ProactivePlanner` 用本地检索取最高分窗口(HIGH + 主题词支撑 + 问句标记才出手),`ProactiveLimiter` 管每群/每人/同问题限流。`PROACTIVE_MODE` 默认 `shadow`(只落决策日志不发消息),`human_only` 只在「@真人且无人回应」时兜底,`first_ask` 首问就答
 - `astrbot_plugin_feishu_qa/storage/snapshot.py` — atomic snapshot persistence (`SnapshotStore`)
 - `astrbot_plugin_feishu_qa/kb_watch.py` — 官方手册 PDF 的每周更新检查(`KB_WATCH_*` 配置):服务器 HEAD ETag/大小,变化即 WARNING + `/qa_status` 提示,并经 `KB_WATCH_NOTIFY_UMO` 给管理员私聊发一条消息(同一更新只发一次);只查不建,基线只在 `kb_sync.py` 重建成功后推进

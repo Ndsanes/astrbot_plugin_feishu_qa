@@ -126,6 +126,31 @@ const SECTIONS = [
         min: 0,
         max: 20,
       },
+      {
+        key: "PROACTIVE_MIN_SCORE",
+        label: "主动答分数线",
+        type: "float",
+        step: 0.5,
+        help: "主动开口是全群可见的，比「有人 @ 才答」单独高一档；0 = 跟随直答阈值。",
+        min: 0,
+        max: 100,
+      },
+      {
+        key: "PROACTIVE_OWNER_IDS",
+        label: "主理人 ID",
+        type: "list",
+        help: "被 @ 到这些人才点名说「<称谓>可能还没看到」；留空 = 一律用中性说法。",
+      },
+      {
+        key: "PROACTIVE_OWNER_LABEL",
+        label: "主理人称呼",
+        help: "用在 @ 兜底的第一行，例如「肖闻姐姐」。",
+      },
+      {
+        key: "PROACTIVE_OWNER_ONLY",
+        label: "只在 @ 主理人时兜底",
+        help: "开 = 只有 @ 到名单里的人，宽限后才补一句；名单为空则完全不兜底。关 = @ 任何成员都兜底。",
+      },
     ],
   },
   {
@@ -605,6 +630,45 @@ function renderForm() {
   updateDirty();
 }
 
+function fmtClock(ts) {
+  if (!ts) return "–";
+  const d = new Date(ts * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderDecisions(items) {
+  const list = el("recent-decisions");
+  if (!list) return;
+  list.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement("li");
+    empty.className = "meta";
+    empty.textContent = "还没有判定记录。";
+    list.append(empty);
+    return;
+  }
+  for (const item of items) {
+    const li = document.createElement("li");
+    const act = document.createElement("span");
+    act.className = `act ${item.action || ""}`;
+    const score = typeof item.score === "number" ? item.score.toFixed(2) : "–";
+    act.textContent = `${item.action || "?"} · ${score}${item.conf ? ` ${item.conf}` : ""}`;
+    const q = document.createElement("span");
+    q.className = "q";
+    q.textContent = item.query || "";
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    const bits = [fmtClock(item.ts)];
+    if (item.stage) bits.push(item.stage);
+    if (item.reason) bits.push(item.reason);
+    if (item.title) bits.push(item.title);
+    meta.textContent = bits.join(" · ");
+    li.append(act, q, meta);
+    list.append(li);
+  }
+}
+
 async function loadStatus() {
   try {
     const data = await bridge.apiGet("status");
@@ -616,6 +680,7 @@ async function loadStatus() {
         .join(" / ") || "–";
     el("st-revision").textContent = data.revision ?? "–";
     el("st-built").textContent = data.built_at ?? "–";
+    renderDecisions(data.recent_decisions || []);
     el("manual-status").textContent = data.kb_watch || "–";
     el("manual-meta").textContent = data.kb_watch_checked_at
       ? `上次检查：${data.kb_watch_checked_at}`

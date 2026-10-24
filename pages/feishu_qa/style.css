@@ -237,6 +237,15 @@ code {
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; text-align: right; word-break: break-all; }
 
+.decisions { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.decisions li { display: grid; gap: 2px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.decisions li:last-child { border-bottom: 0; padding-bottom: 0; }
+.decisions .act { font-weight: 600; }
+.decisions .meta { color: var(--muted); word-break: break-all; }
+.decisions .q { word-break: break-word; }
+.decisions .act.answer { color: var(--ok, #2e7d32); }
+.decisions .act.miss, .decisions .act.miss_intent { color: var(--muted); }
+
 .side { display: grid; gap: 14px; }
 
 .save-bar {

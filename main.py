@@ -28,6 +28,7 @@ from .answer.direct import (
     SOURCE_ATTRIBUTION_MIXED,
     DirectAnswer,
     format_link_list,
+    format_proactive_hint,
 )
 from .answer.router import AnswerRouter
 from .corpus.builder import build_manifest, diff_manifests, merge_manifests
@@ -99,6 +100,12 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 # 无人回应"时兜底;first_ask 群内首问就答。默认 shadow —— 先量一周再开闸。
 _PROACTIVE_MODES = {"off", "shadow", "human_only", "first_ask"}
 
+# @ 提人的两种文本形态。qq_official 适配器**只为"@ 机器人"生造 At 分量**
+# (qqofficial_platform_adapter.py:bot_mentions),@ 其它成员留在 message_str 里
+# 原样带着 ``<@!openid>`` / ``<@openid>``。只认 At 分量的话,这个平台上的
+# "有人 @ 真人"永远看不见——human_only 模式会整个失效。
+_MENTION_RE = re.compile(r"<@!?([^<>\s]{6,})>")
+
 # 页面保存时的服务端校验(防手抖/防伪造请求)。范围按"人类直觉"给宽一点。
 _SETTING_ENUMS: dict[str, set[str]] = {
     "PROACTIVE_MODE": _PROACTIVE_MODES,
@@ -121,6 +128,7 @@ _SETTING_LIMITS: dict[str, tuple[float, float]] = {
     "PROACTIVE_HUMAN_GRACE_SECONDS": (0, 3600),
     "PROACTIVE_MAX_PER_DAY": (0, 100),
     "PROACTIVE_MAX_PER_USER_HOUR": (0, 20),
+    "PROACTIVE_MIN_SCORE": (0, 100),
     "KB_WATCH_INTERVAL_HOURS": (0, 8760),
 }
 
@@ -180,9 +188,22 @@ def _validate_setting(key: str, raw, meta: dict):
         return raw
     raise ValueError(f"{key} 的类型不受支持")
 
+# 不承接的提问(选购/推荐/议价)只回这一句,不给任何建议。
+# 触发点见 answer/intent.py:硬信号(价格/预算/买/哪个好…)无条件拦;软信号
+# (推荐/求建议)在句子里有故障线索时放行;选择/评价句式(怎么样/哪款更)在
+# 通篇没有故障线索时拦。主动答不出这句——没人问的时候不该主动说"我不接"。
+_REFUSAL_REPLY = "这类问题我们目前不接捏，小脑呆现在只能回答Cakewalk相关问题哦"
+
 # 主动发出的消息必须自己说明身份与理由:用户并没有 @ 机器人。
-_PROACTIVE_GROUP_PREFIX = "【FAQ 自动回复】\n\n"
-_PROACTIVE_HUMAN_PREFIX = "群主可能还没看到,先给你一份参考:\n\n"
+# 2026-10-24 收敛版式:一句询问 + 一条链接,不再堆"以下章节与你的问题相关"
+# 和来源署名——主动答占的是别人的屏幕,短比全重要。
+_PROACTIVE_GROUP_LEAD = "是要问这个嘛？"
+# @真人兜底用的两套称谓:能认出被 @ 的人是"主理人"(PROACTIVE_OWNER_IDS)时
+# 才点名,否则一律用中性说法。原先只有一句"群主可能还没看到",等于**默认**
+# 被 @ 的就是群主——而代码根本不知道 @ 的是谁(见 _watch_audience:任何非
+# 机器人的 @ 都算 human),@ 了别人也会这么说。
+_PROACTIVE_OWNER_LEAD = "{label}可能还没看到,先给你一份参考:"
+_PROACTIVE_HUMAN_LEAD = "可能还没看到,先给你一份参考:"
 
 # 单轮自动附链上限:链接是承诺不是列表,多则刷屏且冲淡主答案。
 _MAX_AUTO_LINKS = 3
@@ -339,19 +360,43 @@ class FeishuQaPlugin(Star):
         cached: bool = False,
         extra: dict | None = None,
     ) -> bool:
-        """落一条决策。任何异常已被 DecisionLog 内部吞掉。返回是否落盘成功。"""
-        return self._decision_log.record(
+        """落一条决策。任何异常已被 DecisionLog 内部吞掉。返回是否落盘成功。
+
+        同时打**一行 INFO**。决策日志落在插件数据目录里,WebUI 与平台日志都
+        读不到;2026-10-24 线上复盘时出现过"2.5 小时群里 35 条消息、插件一行
+        日志都没有"的局面——连"到底答了没答"都无法确认。这行 INFO 是那条
+        断掉的观测链,字段刻意压成一行:stage/action/top1/分数/置信/支撑。
+        """
+        records = self._candidate_records(results, query)
+        saved = self._decision_log.record(
             DecisionRecord(
                 stage=stage,
                 action=action,
                 query=query,
-                candidates=self._candidate_records(results, query),
+                candidates=records,
                 thresholds=self._thresholds(),
                 revision=self._revision,
                 cached=cached,
                 extra=extra or {},
             )
         )
+        top = records[0] if records else None
+        logger.info(
+            "[FeishuQA] 判定 stage=%s action=%s top1=%s score=%.2f conf=%s supp=%s "
+            "cands=%d cached=%s saved=%s%s q=%r",
+            stage,
+            action,
+            top.entry_id if top else "-",
+            top.score if top else 0.0,
+            top.confidence if top else "-",
+            top.supported if top else "-",
+            len(records),
+            cached,
+            saved,
+            f" {extra}" if extra else "",
+            (query or "")[:60],
+        )
+        return saved
 
     def _tentative_enabled(self) -> bool:
         return bool(self._cfg("TENTATIVE_ANSWER_ENABLED", False))
@@ -699,7 +744,17 @@ class FeishuQaPlugin(Star):
             )
             # 主动答的判定复用同一个检索器:语料换版后自动跟着新版走。
             self._watch_planner = (
-                ProactivePlanner(self._retriever) if self._watch is not None else None
+                ProactivePlanner(
+                    self._retriever,
+                    # 主动答可以有比"有人 @ 才答"更严的分数线。默认 0 = 跟随
+                    # HIGH 阈值:实测真实提问 top1 分布在 5.18~22.32,而线上
+                    # 误命中是 15.26——没有一条能干净切开两者的线,硬抬分数线
+                    # 只会砍掉真问题(11.32 的"声卡插耳机不出声")却留着误命中。
+                    # 真正解决误答的是意图闸门;这个旋钮留给"想再收紧"时用。
+                    min_score=float(self._cfg("PROACTIVE_MIN_SCORE", 0.0) or 0.0),
+                )
+                if self._watch is not None
+                else None
             )
             self._revision = manifest.get("revision_id")
             # 语料换了 revision,旧判定对新语料不再成立,记忆整体作废。
@@ -1146,6 +1201,10 @@ class FeishuQaPlugin(Star):
                 await self._send_direct(event, plan.direct)
             event.stop_event()  # 高置信已回答,阻断 LLM 流水线
             return
+        if plan.kind == "refused":
+            # 显式指令必须有个回音(/问 沉默等于坏了);但只说明边界,不给建议。
+            yield event.plain_result(_REFUSAL_REPLY)
+            return
         yield event.plain_result(
             "没有在 Q&A 文档里找到足够相关的问题。\n"
             "可以换个说法试试,或直接描述具体报错信息。"
@@ -1209,6 +1268,26 @@ class FeishuQaPlugin(Star):
             event.stop_event()
             return
 
+        if plan.kind == "refused":
+            # 不承接:只回一句范围说明,然后停掉事件——不给答案,也不让主 Agent
+            # 代答。2026-10-24 的产品边界:推荐类能力(Modu)还没接进来,这类
+            # 问题没有可靠答案;撞文档是错的,交给大模型即兴编也是错的。
+            # 这里**回一句**而不是静默:人明确 @ 了机器人,沉默会被当成坏了。
+            event.set_extra("_qa_relevant", False)
+            self._log_decision(
+                stage="route",
+                action="suppressed_intent",
+                query=text,
+                results=plan.candidates,
+                extra={"intent": plan.note.split(":", 1)[1]},
+            )
+            await self._send_direct(
+                event,
+                DirectAnswer(text=_REFUSAL_REPLY, image_paths=[], entry_id=""),
+            )
+            event.stop_event()
+            return
+
         if plan.kind == "tentative":
             # MEDIUM 区:证据不足以断言"这就是答案",但可能有用。
             if await self._jev_takeover(event, text, plan):
@@ -1268,7 +1347,7 @@ class FeishuQaPlugin(Star):
             return
         if str(event.get_sender_id()) == str(event.get_self_id()):
             return
-        text = (event.message_str or "").strip()
+        text = self._strip_mentions(event.message_str)
         if not text:
             return
         audience, targets, has_image = self._watch_audience(event)
@@ -1323,7 +1402,18 @@ class FeishuQaPlugin(Star):
                 )
                 return
             if burst.audience == "human":
-                # 对真人说的话(尤其 @群主):等宽限期,没人接再兜底。
+                # 对真人说的话:等宽限期,没人接再兜底。
+                # 默认只对"主理人"(PROACTIVE_OWNER_IDS)兜底——@ 朋友问问题时
+                # 机器人插一句会很烦,而名单为空时就是保持关闭。
+                if not self._owner_addressed(burst):
+                    self._log_decision(
+                        stage="proactive",
+                        action="suppressed_not_owner",
+                        query=decision.text,
+                        results=results,
+                        extra={**extra, "targets": sorted(burst.targets)},
+                    )
+                    return
                 if self._proactive_mode == "shadow":
                     self._log_decision(
                         stage="proactive",
@@ -1446,16 +1536,9 @@ class FeishuQaPlugin(Star):
                 extra=extra,
             )
             return
-        direct = self._format_links(event, [result.entry])
-        text = direct.text
-        if burst.audience == "human":
-            text = _PROACTIVE_HUMAN_PREFIX + text
-        else:
-            text = _PROACTIVE_GROUP_PREFIX + text
-        payload = DirectAnswer(
-            text=text, image_paths=direct.image_paths, entry_id=direct.entry_id
+        await self._send_direct(
+            event, self._format_proactive(event, result.entry, burst)
         )
-        await self._send_direct(event, payload)
         watch.mark_answered(burst, result.entry.id, now=now)
         self._watch_limiter.record(
             group_id=burst.group_id,
@@ -1500,6 +1583,25 @@ class FeishuQaPlugin(Star):
         }
 
     @staticmethod
+    def _strip_mentions(text: str) -> str:
+        """去掉 ``<@!openid>`` 这类 @ 标记:它们不该进检索(query 里全是噪声)。
+
+        但**不能**直接从 message_str 里消失后再判 audience——判 audience 要用
+        原文,所以两者分开做。
+        """
+        return _MENTION_RE.sub(" ", text or "").strip()
+
+    @staticmethod
+    def _mention_targets(text: str, self_id: str) -> set[str]:
+        """从 message_str 里抠出被 @ 的 ID(排除机器人自己)。"""
+        found: set[str] = set()
+        for match in _MENTION_RE.finditer(text or ""):
+            target = match.group(1).strip()
+            if target and target != self_id:
+                found.add(target)
+        return found
+
+    @staticmethod
     def _watch_audience(event) -> tuple[str, set[str], bool]:
         """这条消息在对谁说:机器人 / 某个真人 / 群里所有人。
 
@@ -1530,6 +1632,8 @@ class FeishuQaPlugin(Star):
                     targets.add(sender)
             elif isinstance(comp, Comp.Image):
                 has_image = True
+        # 兼容没有 At 分量的平台(qq_official):@ 别人只留在 message_str 里。
+        targets |= FeishuQaPlugin._mention_targets(event.message_str, self_id)
         if bot_addressed or event.is_at_or_wake_command:
             return "bot", targets, has_image
         if targets:
@@ -1623,6 +1727,37 @@ class FeishuQaPlugin(Star):
             except Exception as exc:
                 logger.warning("[FeishuQA] 页面接口注册失败 %s: %s", route, exc)
 
+    def _recent_decisions(self, *, limit: int = 12) -> list[dict]:
+        """最近若干条路由/主动答判定(新→旧),给页面"最近判定"卡片用。
+
+        决策日志在插件数据目录里,WebUI 读不到;2026-10-24 复盘时只能靠翻群
+        消息猜"到底答没答"。把最后几条翻出来放在状态页,调阈值时不必再开
+        终端看 JSONL。任何读取异常都降级为空列表:观测不得影响页面。
+        """
+        try:
+            records = self._decision_log.read_all(limit=limit)
+        except Exception:
+            return []
+        out: list[dict] = []
+        for rec in reversed(records):
+            cands = rec.get("cands") or []
+            top = cands[0] if cands else {}
+            extra = rec.get("extra") or {}
+            out.append(
+                {
+                    "ts": rec.get("ts"),
+                    "stage": rec.get("stage"),
+                    "action": rec.get("action"),
+                    "query": rec.get("q") or f"#{rec.get('qh', '')}",
+                    "title": top.get("title") or "",
+                    "score": top.get("score"),
+                    "conf": top.get("conf") or "",
+                    "supported": top.get("supported"),
+                    "reason": extra.get("reason") or extra.get("intent") or "",
+                }
+            )
+        return out
+
     async def _page_status(self):
         from astrbot.api.web import json_response
 
@@ -1642,6 +1777,7 @@ class FeishuQaPlugin(Star):
                     str(s) for s in (self._cfg("FUUUMUSIC_SECTIONS", []) or [])
                 ],
                 "proactive_mode": self._proactive_mode,
+                "recent_decisions": self._recent_decisions(),
                 "kb_watch": status_line(self._kb_watch),
                 "kb_watch_checked_at": (self._kb_watch or {}).get("checked_at"),
                 "kb_watch_pending": bool((self._kb_watch or {}).get("pending")),
@@ -1918,6 +2054,54 @@ class FeishuQaPlugin(Star):
             url_of=self._wiki_block_url,
             markdown=platform_name == "qq_official",
             attribution=self._attribution_for(entries),
+        )
+
+    def _owner_addressed(self, burst) -> bool:
+        """被 @ 的人里有没有"主理人"。
+
+        ``PROACTIVE_OWNER_ONLY`` 关闭时一律返回 True(退化为"@ 谁都兜底");
+        开启时要求 ``PROACTIVE_OWNER_IDS`` 非空且命中——名单为空 = 不兜底,
+        这比"没人配就等于谁都算"安全得多。
+        """
+        if not bool(self._cfg("PROACTIVE_OWNER_ONLY", True)):
+            return True
+        owners = {str(o) for o in (self._cfg("PROACTIVE_OWNER_IDS", []) or [])}
+        if not owners:
+            return False
+        return bool(owners & set(burst.targets))
+
+    def _proactive_lead(self, burst) -> str:
+        """这句话在对谁说 —— 决定第一行怎么称呼。
+
+        主动答的第一行是**唯一**说明"我为什么插话"的地方,称谓错了比不说更糟:
+        原先固定写"群主可能还没看到",而 ``_watch_audience`` 只区分「机器人 /
+        某个真人 / 全群」,并不知道被 @ 的是谁——@ 了 A 也会说成"群主"。
+        现在只有被 @ 的人确实在 ``PROACTIVE_OWNER_IDS`` 里才点名,否则中性。
+        """
+        if burst.audience != "human":
+            return _PROACTIVE_GROUP_LEAD
+        owners = {str(o) for o in (self._cfg("PROACTIVE_OWNER_IDS", []) or [])}
+        if owners and set(burst.targets) & owners:
+            label = str(self._cfg("PROACTIVE_OWNER_LABEL", "肖闻姐姐") or "").strip()
+            if label:
+                return _PROACTIVE_OWNER_LEAD.format(label=label)
+        return _PROACTIVE_HUMAN_LEAD
+
+    def _format_proactive(self, event, entry, burst) -> DirectAnswer:
+        """主动答版式:紧凑两行(询问 + 一条链接),不带来源署名。
+
+        被 @ 真人的兜底保留身份说明——那种场合读者不知道机器人为什么插话;
+        群内首问则直接问"是要问这个嘛?"。
+        """
+        platform_name = ""
+        with contextlib.suppress(Exception):
+            platform_name = str(event.get_platform_name() or "")
+        lead = self._proactive_lead(burst)
+        return format_proactive_hint(
+            entry,
+            url_of=self._wiki_block_url,
+            markdown=platform_name == "qq_official",
+            lead=lead,
         )
 
     def _build_link_list(self, event, entries: list) -> DirectAnswer:
@@ -2573,4 +2757,9 @@ class FeishuQaPlugin(Star):
 
     @staticmethod
     def _strip_wake(message_str: str) -> str:
-        return (message_str or "").strip()
+        """去掉唤醒标记与 @ 提人标记,留下真正的问句。
+
+        qq_official 上 @ 别人的 ``<@!openid>`` 会原样留在 message_str 里
+        (适配器只为"@ 机器人"造 At 分量),不清掉就会变成检索噪声。
+        """
+        return FeishuQaPlugin._strip_mentions(message_str)

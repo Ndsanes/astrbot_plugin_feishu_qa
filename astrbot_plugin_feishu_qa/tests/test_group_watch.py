@@ -284,6 +284,56 @@ class TestWindowsAndPlanner:
         assert decision.action == "wait"
 
 
+class TestProactiveIntentAndScoreGate:
+    """线上 2026-10-24:15.26 分的选购提问被主动答出去了。"""
+
+    def _burst(self, texts: list[str]) -> Burst:
+        watcher = GroupWatcher()
+        burst = None
+        for i, text in enumerate(texts):
+            burst = watcher.note(msg(i, text))
+        assert burst is not None
+        return burst
+
+    def _keyboard_retriever(self) -> Retriever:
+        return Retriever(
+            [
+                _entry(
+                    "qa_midi_keyboard",
+                    "连接 USB MIDI 键盘",
+                    "把键盘用 USB 线连到电脑,在偏好设置里选择 MIDI 输入设备。",
+                    ["MIDI键盘", "电子琴", "键盘", "键盘连不上"],
+                )
+            ],
+            high_threshold=6.5,
+            medium_threshold=3.0,
+        )
+
+    def test_purchase_question_never_answered_proactively(self) -> None:
+        planner = ProactivePlanner(self._keyboard_retriever())
+        decision = planner.plan(self._burst(["脑袋，键盘和鼠标推荐哪些？"]))
+        assert decision.action == "wait"
+        assert decision.reason.startswith("intent_blocked")
+        assert "推荐" in decision.reason
+
+    def test_same_words_troubleshooting_still_answered(self) -> None:
+        planner = ProactivePlanner(self._keyboard_retriever())
+        decision = planner.plan(self._burst(["键盘连不上电脑怎么办"]))
+        assert decision.action == "answer"
+
+    def test_min_score_gate_is_separate_from_high_threshold(self) -> None:
+        # 主动答专用分数线:过了 HIGH 也不够,理由里要写清差多少。
+        planner = ProactivePlanner(self._keyboard_retriever(), min_score=999)
+        decision = planner.plan(self._burst(["键盘连不上电脑怎么办"]))
+        assert decision.action == "wait"
+        assert decision.reason.startswith("below_min_score")
+        assert "<999" in decision.reason
+
+    def test_min_score_zero_keeps_default_behaviour(self) -> None:
+        planner = ProactivePlanner(self._keyboard_retriever(), min_score=0)
+        assert planner.plan(self._burst(["键盘连不上电脑怎么办"])).action == "answer"
+
+
 class TestLimiter:
     def test_duplicate_within_ttl(self) -> None:
         limiter = ProactiveLimiter()

@@ -30,6 +30,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from .answer.intent import check_intent
 from .retrieval.scorer import Confidence, Retriever, SearchResult
 
 _WS_RE = re.compile(r"\s+")
@@ -368,23 +369,43 @@ class ProactiveDecision:
 
 
 class ProactivePlanner:
-    """burst → 决策。只用本地确定性检索,零 LLM、零网络。"""
+    """burst → 决策。只用本地确定性检索,零 LLM、零网络。
 
-    def __init__(self, retriever: Retriever, *, max_chars: int = 400) -> None:
+    ``min_score`` 是**主动答专用**的分数线:主动开口是全群可见的,误答代价
+    远高于"有人 @ 之后才答"。传 0 表示沿用检索器自己的 HIGH 阈值。
+    """
+
+    def __init__(
+        self,
+        retriever: Retriever,
+        *,
+        max_chars: int = 400,
+        min_score: float = 0.0,
+    ) -> None:
         self.retriever = retriever
         self.max_chars = max_chars
+        self.min_score = max(0.0, float(min_score))
 
     def plan(self, burst: Burst) -> ProactiveDecision:
         best_high: tuple[str, SearchResult, int] | None = None
         best_low: tuple[str, SearchResult, int] | None = None
         saw_question = False
         saw_topic = False
+        saw_intent = False
+        intent_hits: tuple[str, ...] = ()
 
         for window in candidate_windows(burst):
             text = assemble(window, max_chars=self.max_chars)
             if not has_question(text):
                 continue
             saw_question = True
+            # 选购/议价类提问:语料里必然没有答案,分数再高也不开口
+            # (线上实例:15.26 分撞上《连接 USB MIDI 键盘》的那一次)。
+            verdict = check_intent(text)
+            if verdict.blocked:
+                saw_intent = True
+                intent_hits = intent_hits or verdict.matched
+                continue
             # 只有"怎么办/怎么"这类无主题词的碎片不许出手:它们在标题里
             # 满语料都是,containment 会给满分,答出去等于瞎猜。
             if not self.retriever.topic_words(text):
@@ -395,7 +416,11 @@ class ProactivePlanner:
                 continue
             result = results[0]
             supported = self.retriever.supports_query(result.entry, text)
-            if result.confidence == Confidence.HIGH and supported:
+            if (
+                result.confidence == Confidence.HIGH
+                and supported
+                and result.score >= self.min_score
+            ):
                 if best_high is None or result.score > best_high[1].score:
                     best_high = (text, result, len(window))
             elif best_low is None or result.score > best_low[1].score:
@@ -412,11 +437,20 @@ class ProactivePlanner:
             )
         if best_low is not None:
             _, result, window_size = best_low
+            reason = f"below_high:{result.confidence}"
+            if result.confidence == Confidence.HIGH:
+                # 过 HIGH 但没过主动答专用分数线:说出来才能知道差多少。
+                reason = f"below_min_score:{round(result.score, 2)}<{self.min_score}"
             return ProactiveDecision(
                 action="wait",
-                reason=f"below_high:{result.confidence}",
+                reason=reason,
                 result=result,
                 window_size=window_size,
+            )
+        if saw_intent:
+            return ProactiveDecision(
+                action="wait",
+                reason="intent_blocked:" + ",".join(intent_hits),
             )
         if saw_topic:
             return ProactiveDecision(action="wait", reason="no_match")
