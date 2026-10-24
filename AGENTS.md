@@ -103,8 +103,8 @@ No build step exists; packages run from source.
 ## Testing & QA
 
 - pytest with `asyncio_mode = "auto"` (bare `async def test_*` works, no decorators). 根 `testpaths` 含 `astrbot_lark_kit/tests` 与 `astrbot_plugin_feishu_qa/tests`；bili_verify 是独立仓库（gitignore），测试用 `pytest astrbot_plugin_bili_verify_feishu/tests -q` 显式运行（其 tests/stubs 提供 astrbot 假包）。
-- 当前基线（2026-10-24）：kit 88 + lark_cli_platform 55 + feishu_qa 437 = **580 passed**（根套件）+ bili_verify 70 = 全家桶 650。基线值只增不减，验收标准是"全套 PASS"而非固定数字。
-- **bili_verify UID 存在性校验（v0.1.4）**：入群备注/群消息里的 UID 会调 B站 `card` 接口确认存在。只有接口明确 `-404` 才拒绝；超时/风控/网络错误按 unknown 放行（fail-open），避免外部服务抖动误伤真实用户。
+- 当前基线（2026-10-24）：kit 88 + lark_cli_platform 55 + feishu_qa 437 = **580 passed**（根套件）+ bili_verify 77 = 全家桶 657。基线值只增不减，验收标准是"全套 PASS"而非固定数字。
+- **bili_verify UID 存在性校验（v0.1.4）**：入群备注/群消息里的 UID 会调 B站 `card` 接口确认存在。只有接口明确 `-404` 才拒绝；超时/风控/网络错误按 unknown 暂缓审批，隔 10 分钟复查一次，仍未知才放行（避免立刻放行假 UID，也不永久误伤真实用户）。
 - **bili_verify 白名单条目形态（v0.0.7 教训）**：qq_official 条目须为完整 UMO `实例ID:GroupMessage:群openid`（多 bot 轮询按首段定位归属 bot）；`AdmissionsStore.is_whitelisted` 同时接受裸 openid 与 UMO 全串（按末段匹配）。改任何一侧的数据形态时，轮询、校验、审批三条链路必须同步，否则会出现"能拉到申请但被判非白名单"的静默丢弃。
 - When the real `astrbot` package isn't installed, [conftest.py](astrbot_plugin_feishu_qa/tests/conftest.py) prepends `tests/stubs/` containing a minimal fake `astrbot` package (`api.event.AstrMessageEvent`, `api.star.Star`, etc.) so the suite runs offline.
 - Tests use real fixture corpora (`qa_r8268.xml`, revision-tagged) rather than mocks for parser/builder/retrieval paths; `test_main.py` builds a live plugin instance against a `tmp_path` data dir via `monkeypatch.setenv("ASTRBOT_DATA_DIR", ...)`.
