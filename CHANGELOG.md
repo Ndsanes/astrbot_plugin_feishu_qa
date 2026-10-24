@@ -72,6 +72,10 @@
   `manifest.json` 的 `source` 记录 sha256/页数/版本号（30.12.00）作为基线；
   `--all --kb-name "Cakewalk sonar" --replace` 完成重建与整库替换。
   `build_knowledge.py` 同步补上 `--source-url` 与 `source` 元数据。
+  导入默认按**一级章节**拆文档(名字带章节内容 hash):只导入变化的章节,
+  未变章节不重新 embedding;旧库的 9 个等分文档会在首次迁移时被替换
+  (一次性全量 embedding,之后增量)。分块本身不用 AI,embedding 由
+  AstrBot 的 SiliconFlow bge-m3 完成(检索重排用 Qwen3-Reranker-8B)。
 - `astrbot_api.py` 固定浏览器 UA：默认 `python-urllib` 会命中实例前的
   Cloudflare 1010（整站 403，看起来像鉴权失败）。
 

@@ -32,6 +32,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -282,6 +283,31 @@ def load_chunks(output: Path) -> list[str]:
     return chunks
 
 
+_BREADCRUMB_RE = re.compile(r"^【(.+?)】", re.S)
+_UNSAFE_NAME_RE = re.compile(r'[\\/:*?"<>|\r\n\t]+')
+
+
+def chunk_chapter(chunk: str) -> str:
+    """从块首的面包屑取一级章节(【文档 > 章节 > …】 的第二段)。
+
+    章节是"增量重建"的最小单位:手册更新通常落在少数章节,按章节拆文档后
+    未变化的章节可以整篇跳过,不必重新 embedding。
+    """
+    match = _BREADCRUMB_RE.match(chunk.lstrip())
+    if not match:
+        return ""
+    parts = [part.strip() for part in match.group(1).split(">")]
+    if len(parts) >= 2:
+        return parts[1]
+    return parts[0] if parts else ""
+
+
+def safe_doc_name(text: str, *, limit: int = 80) -> str:
+    cleaned = _UNSAFE_NAME_RE.sub(" ", text or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:limit] or "misc"
+
+
 def build_documents(
     chunks: list[str],
     *,
@@ -289,29 +315,73 @@ def build_documents(
     sha256: str,
     prefix: str = DEFAULT_DOC_PREFIX,
     split: int = 1,
+    group_by: str = "chapter",
     suffix: str = "md",
 ) -> list[dict]:
-    """把分块列表切成 1..N 个待导入文档。
+    """把分块列表切成待导入文档。
 
-    单个文档 3166 块(≈3.4MB)一般能一次导入;``--split`` 用于网关/反代
-    限制请求体时拆包,名字带 part 便于识别与替换。
+    ``group_by="chapter"``(默认):按一级章节拆文档,文档名带该章节内容的
+    sha256 前 8 位。内容没变的章节名字不变 → 导入时直接跳过,只有变化的
+    章节需要重新 embedding。
+    ``group_by="fixed"``:沿用 1..N 等分(--split),用于网关限制请求体或
+    想保持旧结构时;等分边界会随内容漂移,增量收益小。
     """
-    split = max(1, int(split))
     version = version or "unknown"
-    stamp = f"{prefix} v{version} ({sha256[:8]})"
-    if split == 1 or len(chunks) <= split:
-        return [{"file_name": f"{stamp}.{suffix}", "chunks": chunks}]
-    size = -(-len(chunks) // split)
+    stamp = f"{prefix} v{version}"
+    if group_by == "fixed":
+        split = max(1, int(split))
+        if split == 1 or len(chunks) <= split:
+            return [{"file_name": f"{stamp} ({sha256[:8]}).{suffix}", "chunks": chunks}]
+        size = -(-len(chunks) // split)
+        documents = []
+        for index in range(0, len(chunks), size):
+            part = index // size + 1
+            documents.append(
+                {
+                    "file_name": f"{stamp} ({sha256[:8]}) part{part}of{split}.{suffix}",
+                    "chunks": chunks[index : index + size],
+                }
+            )
+        return documents
+
+    groups: dict[str, list[str]] = {}
+    order: list[str] = []
+    for chunk in chunks:
+        chapter = safe_doc_name(chunk_chapter(chunk))
+        if chapter not in groups:
+            groups[chapter] = []
+            order.append(chapter)
+        groups[chapter].append(chunk)
     documents = []
-    for index in range(0, len(chunks), size):
-        part = index // size + 1
+    for chapter in order:
+        body = groups[chapter]
+        digest = hashlib.sha256("\n".join(body).encode("utf-8")).hexdigest()[:8]
         documents.append(
             {
-                "file_name": f"{stamp} part{part}of{split}.{suffix}",
-                "chunks": chunks[index : index + size],
+                "file_name": f"{stamp} - {chapter} ({digest}).{suffix}",
+                "chunks": body,
             }
         )
     return documents
+
+
+def plan_sync(
+    documents: list[dict], existing: list[dict], prefix: str
+) -> tuple[list[dict], list[dict]]:
+    """对比目标文档与库内文档,返回 (待导入, 待删除)。
+
+    名字里带内容指纹:同名 = 内容没变,跳过;新名字 = 新增/变化章节;
+    库内匹配前缀但不在目标集合里的 = 已删除章节或旧版本,待删。
+    """
+    existing_names = {str(doc.get("doc_name") or "") for doc in existing}
+    desired_names = {doc["file_name"] for doc in documents}
+    to_import = [doc for doc in documents if doc["file_name"] not in existing_names]
+    to_delete = [
+        doc
+        for doc in matching_docs(existing, prefix)
+        if str(doc.get("doc_name") or "") not in desired_names
+    ]
+    return to_import, to_delete
 
 
 def payload_path(output: Path) -> Path:
@@ -471,7 +541,13 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("CAKEWALK_KB_DOC_PREFIX", DEFAULT_DOC_PREFIX),
         help="旧文档名前缀(--replace 时按它匹配)",
     )
-    parser.add_argument("--split", type=int, default=1, help="拆成几个文档导入")
+    parser.add_argument(
+        "--group-by",
+        choices=["chapter", "fixed"],
+        default="chapter",
+        help="chapter=按一级章节拆文档(默认,便于增量重建);fixed=等分",
+    )
+    parser.add_argument("--split", type=int, default=1, help="fixed 模式下拆成几个文档")
     parser.add_argument("--replace", action="store_true", help="导入成功后删除旧文档")
     parser.add_argument("--dry-run", action="store_true", help="只生成 payload,不上传")
     parser.add_argument("--pdf", type=Path, default=None, help="手动指定本地 PDF")
@@ -544,46 +620,43 @@ def main(argv: list[str] | None = None) -> int:
             sha256=str(source.get("sha256") or ""),
             prefix=args.doc_prefix,
             split=args.split,
+            group_by=args.group_by,
         )
         write_payload(output, documents)
 
         if not args.upload and not args.all:
             return 0
-        if args.dry_run:
-            print("[dry-run] 不连接 AstrBot")
-            return 0
-
         api = _client()
         kb_id = resolve_kb(api, kb_id=args.kb_id, kb_name=args.kb_name)
         print(f"[kb] {args.kb_name or kb_id} → {kb_id}")
         existing = list_docs(api, kb_id)
-        existing_names = {str(doc.get("doc_name") or "") for doc in existing}
-        if not args.force and all(
-            doc["file_name"] in existing_names for doc in documents
-        ):
-            # 幂等:同一版本 sha 已在库里就不重复导入(cron 每天跑也不会膨胀)
-            print("[kb] 该版本已在知识库中,跳过导入")
+        to_import, to_delete = plan_sync(documents, existing, args.doc_prefix)
+        print(
+            f"[sync] 目标 {len(documents)} 个章节文档;新增/变化 {len(to_import)} 个,"
+            f"待删旧文档 {len(to_delete)} 个"
+        )
+        if not to_import and not to_delete:
+            # 幂等:cron 每天跑也不会重复 embedding
+            print("[kb] 已是最新(章节内容与库内一致),跳过")
             return 0
+        if args.dry_run:
+            print("[dry-run] 只预览,不导入/不删除")
+            return 0
+        if to_delete and not args.replace:
+            print("[warn] 有旧文档待删除,加 --replace 才会执行(否则会残留旧章节)")
+        if to_import:
+            preview = "、".join(doc["file_name"] for doc in to_import[:3])
+            tail = " …" if len(to_import) > 3 else ""
+            print(f"[sync] 需要重建 embedding 的章节: {preview}{tail}")
         before = kb_stats(api, kb_id)
         print(
             f"[kb] before docs={before.get('doc_count')} chunks={before.get('chunk_count')}"
         )
-        old_docs = matching_docs(existing, args.doc_prefix)
-        if old_docs:
-            print(
-                f"[kb] 匹配旧文档 {len(old_docs)} 个"
-                +("(导入成功后删除)" if args.replace else "(加 --replace 才会删除)")
-            )
-        elif args.replace:
-            print(
-                f"[warn] --replace 没匹配到旧文档,检查 --doc-prefix={args.doc_prefix!r}"
-            )
-
-        task_id = import_documents(api, kb_id, documents)
-        wait_task(api, task_id)
-
-        if args.replace:
-            delete_documents(api, kb_id, old_docs)
+        if to_import:
+            task_id = import_documents(api, kb_id, to_import)
+            wait_task(api, task_id)
+        if to_delete and args.replace:
+            delete_documents(api, kb_id, to_delete)
         after = kb_stats(api, kb_id)
         print(
             f"[kb] after docs={after.get('doc_count')} chunks={after.get('chunk_count')}"

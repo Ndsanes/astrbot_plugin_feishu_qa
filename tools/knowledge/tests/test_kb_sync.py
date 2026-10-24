@@ -118,20 +118,56 @@ class TestCheck:
 
 
 class TestDocuments:
-    def test_single_document_name_carries_version_and_hash(self) -> None:
+    def test_chapter_grouping_uses_breadcrumb(self) -> None:
+        chunks = [
+            "【Doc > Chapter A > Sec 1】\n\nbody a1",
+            "【Doc > Chapter A > Sec 2】\n\nbody a2",
+            "【Doc > Chapter B > Sec 1】\n\nbody b1",
+        ]
         docs = kb_sync.build_documents(
-            ["a", "b"], version="30.12.00", sha256="abcdef1234567890"
+            chunks, version="30.12.00", sha256="abcdef1234567890"
+        )
+        assert docs[0]["file_name"].startswith(
+            "Cakewalk Sonar Reference Guide v30.12.00 - Chapter A ("
+        )
+        assert docs[1]["file_name"].startswith(
+            "Cakewalk Sonar Reference Guide v30.12.00 - Chapter B ("
+        )
+        assert [len(doc["chunks"]) for doc in docs] == [2, 1]
+        assert docs[0]["chunks"] == chunks[:2]
+
+    def test_chapter_hash_changes_only_for_changed_chapter(self) -> None:
+        base = [
+            "【Doc > A】\n\nx",
+            "【Doc > B】\n\ny",
+        ]
+        changed = [
+            "【Doc > A】\n\nx",
+            "【Doc > B】\n\ny CHANGED",
+        ]
+        first = kb_sync.build_documents(base, version="1", sha256="0" * 64)
+        second = kb_sync.build_documents(changed, version="1", sha256="1" * 64)
+        assert first[0]["file_name"] == second[0]["file_name"]
+        assert first[1]["file_name"] != second[1]["file_name"]
+
+    def test_missing_breadcrumb_goes_to_misc(self) -> None:
+        docs = kb_sync.build_documents(
+            ["plain text"], version="1", sha256="0" * 64
         )
         assert len(docs) == 1
-        assert docs[0]["file_name"] == (
-            "Cakewalk Sonar Reference Guide v30.12.00 (abcdef12).md"
-        )
-        assert docs[0]["chunks"] == ["a", "b"]
+        assert " - misc (" in docs[0]["file_name"]
 
-    def test_split_keeps_every_chunk_once(self) -> None:
+    def test_unsafe_chapter_chars_are_sanitized(self) -> None:
+        docs = kb_sync.build_documents(
+            ["【Doc > a/b:c*d?e】\n\nx"], version="1", sha256="0" * 64
+        )
+        assert "/" not in docs[0]["file_name"].split(" - ", 1)[1]
+        assert ":" not in docs[0]["file_name"]
+
+    def test_fixed_mode_split_keeps_every_chunk_once(self) -> None:
         chunks = [f"c{i}" for i in range(10)]
         docs = kb_sync.build_documents(
-            chunks, version="1.0.0", sha256="x" * 64, split=3
+            chunks, version="1.0.0", sha256="x" * 64, split=3, group_by="fixed"
         )
         assert len(docs) == 3
         assert [len(d["chunks"]) for d in docs] == [4, 4, 2]
@@ -139,11 +175,62 @@ class TestDocuments:
         assert joined == chunks
         assert docs[0]["file_name"].endswith("part1of3.md")
 
-    def test_split_larger_than_chunks_is_single(self) -> None:
+    def test_fixed_mode_split_larger_than_chunks_is_single(self) -> None:
         docs = kb_sync.build_documents(
-            ["a"], version="v", sha256="y" * 64, split=9
+            ["a"], version="v", sha256="y" * 64, split=9, group_by="fixed"
         )
         assert len(docs) == 1
+
+
+class TestPlanSync:
+    PREFIX = "Cakewalk Sonar Reference Guide"
+
+    def _doc(self, name: str, doc_id: str = "1") -> dict:
+        return {"file_name": name, "chunks": ["x"]}
+
+    def _existing(self, name: str, doc_id: str) -> dict:
+        return {"doc_id": doc_id, "doc_name": name, "chunk_count": 1}
+
+    def test_unchanged_plan_is_empty(self) -> None:
+        docs = [
+            self._doc(f"{self.PREFIX} - A (11111111).md"),
+            self._doc(f"{self.PREFIX} - B (22222222).md"),
+        ]
+        existing = [self._existing(doc["file_name"], str(i)) for i, doc in enumerate(docs)]
+        to_import, to_delete = kb_sync.plan_sync(docs, existing, self.PREFIX)
+        assert to_import == [] and to_delete == []
+
+    def test_changed_chapter_imports_one_and_deletes_one(self) -> None:
+        docs = [
+            self._doc(f"{self.PREFIX} - A (11111111).md"),
+            self._doc(f"{self.PREFIX} - B (99999999).md"),
+        ]
+        existing = [
+            self._existing(f"{self.PREFIX} - A (11111111).md", "1"),
+            self._existing(f"{self.PREFIX} - B (22222222).md", "2"),
+        ]
+        to_import, to_delete = kb_sync.plan_sync(docs, existing, self.PREFIX)
+        assert [d["file_name"] for d in to_import] == [docs[1]["file_name"]]
+        assert [d["doc_id"] for d in to_delete] == ["2"]
+
+    def test_removed_chapter_only_deletes(self) -> None:
+        docs = [self._doc(f"{self.PREFIX} - A (11111111).md")]
+        existing = [
+            self._existing(f"{self.PREFIX} - A (11111111).md", "1"),
+            self._existing(f"{self.PREFIX} - Old (33333333).md", "3"),
+        ]
+        to_import, to_delete = kb_sync.plan_sync(docs, existing, self.PREFIX)
+        assert to_import == []
+        assert [d["doc_id"] for d in to_delete] == ["3"]
+
+    def test_unrelated_documents_are_never_deleted(self) -> None:
+        docs = [self._doc(f"{self.PREFIX} - A (11111111).md")]
+        existing = [
+            self._existing(f"{self.PREFIX} - A (11111111).md", "1"),
+            self._existing("有福同享全家桶FAQ.md", "9"),
+        ]
+        _, to_delete = kb_sync.plan_sync(docs, existing, self.PREFIX)
+        assert to_delete == []
 
 
 class TestMatchingDocs:

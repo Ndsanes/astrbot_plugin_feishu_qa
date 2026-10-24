@@ -60,10 +60,21 @@ python tools/knowledge/kb_sync.py --upload --dry-run   # 只生成 payload
   `last-modified` 变了、正文与分块逐字节不变)。
 - `manifest.json` 的 `source` 记录 `sha256 / bytes / page_count / version
   / pdf_mod_date`,这是判定基线;`source/remote.json` 缓存远端校验头。
-- **导入**走预分块接口(`documents/import`),块原样入库;`--split N` 用于
-  网关限制请求体时拆成 N 个文档。导入是后台任务,脚本会轮询到完成。
+- **导入**走预分块接口(`documents/import`),块原样入库;导入是后台任务,
+  脚本会轮询到完成。
+- **分块本身不用 AI**:提取/清洗/结构/切片/面包屑全部本地确定性完成,同一
+  份 PDF 重跑逐字节一致。唯一的 AI 在导入侧——AstrBot 用 SiliconFlow
+  `bge-m3` 逐块生成 embedding(检索时用 `Qwen3-Reranker-8B` 重排)。
+  可选 `--context-mode llm` 的语境增强(调用方注入 LLM,早期实验用豆包)
+  产出 `llm_chunks/`,**当前知识库没有用它**,导入的是 `chunks/`。
+- **增量重建(默认 `--group-by chapter`)**:按一级章节把块拆成文档,文档名
+  带该章节内容的 sha256 前 8 位。同步时只导入"名字不在库里"的章节,并删除
+  名字已不在目标集合里的旧文档——没变的章节不会重新 embedding。
+  `--group-by fixed --split N` 保留旧的等分方式,但等分边界会随内容漂移。
 - `--replace` 会删除名字以 `--doc-prefix`(默认 `Cakewalk Sonar Reference
-  Guide`)开头的旧文档,**先跑 `--list-docs` 确认匹配范围**。
+  Guide`)开头、且不在目标集合里的旧文档,**首次迁移先 `--list-docs` +
+  `--dry-run` 确认范围**。旧库是 9 个等分文档(part1..8 + 基底),切成
+  45 个章节文档会触发**一次性全量 embedding**;之后才只重算变化章节。
 - 退出码:`0` 最新/成功、`2` 有更新、`3` 缺基线(先 `--build --force`)、
   `1` 出错。cron 可以据此决定是否继续。
 
