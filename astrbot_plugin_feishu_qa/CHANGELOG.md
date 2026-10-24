@@ -64,6 +64,17 @@
   `免费版和会员版有什么区别` → 《Sonar 免费版与会员版对比》HIGH 27.50；
   `怎么办`（裸问句）→ 拒绝出手。
 
+### 工具
+
+- **官方手册 PDF 更新检查 + 知识库自动同步**：新增 `tools/knowledge/kb_sync.py`。
+  `--check` 比对远端 ETag/大小，变了才下载核对 sha256（内容没变不会误报——
+  官方文件 2026-10-23 的 `last-modified` 变化就属于这种情况）；
+  `manifest.json` 的 `source` 记录 sha256/页数/版本号（30.12.00）作为基线；
+  `--all --kb-name "Cakewalk sonar" --replace` 完成重建与整库替换。
+  `build_knowledge.py` 同步补上 `--source-url` 与 `source` 元数据。
+- `astrbot_api.py` 固定浏览器 UA：默认 `python-urllib` 会命中实例前的
+  Cloudflare 1010（整站 403，看起来像鉴权失败）。
+
 ## v0.9.12 (2026-10-07)
 
 ### 修复

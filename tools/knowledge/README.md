@@ -42,6 +42,38 @@ payload `{"documents": [{"file_name": "...", "chunks": ["0001_....txt", ...]}]}`
 块内容原样入库、不被二次切片。若用 WebUI 手动上传 txt,AstrBot 会以
 RecursiveCharacter(500 字符/100 重叠) 二次切片,breadcrumb 前缀只在首段保留。
 
+## 检查更新 / 自动同步知识库
+
+官方手册固定托管在
+`https://bandlab.github.io/cakewalk/docs/Cakewalk%20Sonar%20Reference%20Guide.pdf`。
+`kb_sync.py` 把"检查 → 重建 → 导入"串成一条命令:
+
+```bash
+python tools/knowledge/kb_sync.py --check        # 只检查(0=最新 / 2=有更新 / 3=缺基线)
+python tools/knowledge/kb_sync.py --all --kb-name "Cakewalk sonar" --replace
+python tools/knowledge/kb_sync.py --list-docs --kb-name "Cakewalk sonar"
+python tools/knowledge/kb_sync.py --upload --dry-run   # 只生成 payload
+```
+
+- **检查**先比远端 `ETag + Content-Length`,不一致才下载核对 `sha256`。
+  官方文件被重新发布但内容没变时不会被误判成更新(2026-10-24 实测:
+  `last-modified` 变了、正文与分块逐字节不变)。
+- `manifest.json` 的 `source` 记录 `sha256 / bytes / page_count / version
+  / pdf_mod_date`,这是判定基线;`source/remote.json` 缓存远端校验头。
+- **导入**走预分块接口(`documents/import`),块原样入库;`--split N` 用于
+  网关限制请求体时拆成 N 个文档。导入是后台任务,脚本会轮询到完成。
+- `--replace` 会删除名字以 `--doc-prefix`(默认 `Cakewalk Sonar Reference
+  Guide`)开头的旧文档,**先跑 `--list-docs` 确认匹配范围**。
+- 退出码:`0` 最新/成功、`2` 有更新、`3` 缺基线(先 `--build --force`)、
+  `1` 出错。cron 可以据此决定是否继续。
+
+每天自动跑一次(API Key 30 天过期,过期后 `--check` 仍可用,上传会失败):
+
+```cron
+0 5 * * * cd <repo> && .venv/bin/python tools/knowledge/kb_sync.py \
+    --all --kb-name "Cakewalk sonar" --replace >> output/cakewalk/sync.log 2>&1
+```
+
 ## 推荐 KB 配置
 
 - Embedding: BAAI/bge-m3(多语,中问英答可用)

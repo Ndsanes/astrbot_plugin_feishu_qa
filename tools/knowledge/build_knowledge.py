@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from kb_pipeline.baseline import baseline_chunks  # noqa: E402
 from kb_pipeline.chunker import chunk_sections  # noqa: E402
 from kb_pipeline.cleaner import clean_pages  # noqa: E402
-from kb_pipeline.extract import extract_pages  # noqa: E402
+from kb_pipeline.extract import extract_pages, pdf_info  # noqa: E402
 from kb_pipeline.structure import (  # noqa: E402
     build_sections,
     detect_toc_pages,
@@ -38,6 +39,25 @@ def content_hash(payload: object) -> str:
     ).hexdigest()
 
 
+def file_sha256(path: Path, *, block: int = 1 << 20) -> str:
+    """流式文件指纹:大 PDF 不进内存。"""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        while chunk := fh.read(block):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+_VERSION_RE = re.compile(r"\bVersion\s+(\d+\.\d+(?:\.\d+)?)\b")
+
+
+def source_version(pages) -> str:
+    """从 PDF 前几页的版权/版本页提取手册版本号(如 30.12.00)。"""
+    head = "\n".join(page.text for page in pages[:15])
+    match = _VERSION_RE.search(head)
+    return match.group(1) if match else ""
+
+
 def run_pipeline(
     pdf_path: Path,
     output_dir: Path,
@@ -46,6 +66,7 @@ def run_pipeline(
     context_mode: str = "breadcrumb",  # none | breadcrumb | llm
     min_tokens: int = DEFAULT_MIN_TOKENS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    source_url: str = "",
 ) -> dict:
     """执行完整流水线,返回 manifest 字典(同时落盘)。"""
     doc_title = pdf_path.stem.strip() or "Document"
@@ -77,6 +98,16 @@ def run_pipeline(
         "extraction_method": "pymupdf(font-size structure)",
         "noise_cleanup": clean_stats,
         "token_count_method": "approximate_chars_4",
+        # 源文件身份:更新判定只看这几项(kb_sync.py --check)。
+        "source": {
+            "file": pdf_path.name,
+            "url": source_url,
+            "bytes": pdf_path.stat().st_size,
+            "sha256": file_sha256(pdf_path),
+            "page_count": len(pages),
+            "version": source_version(cleaned),
+            "pdf_mod_date": str(pdf_info(pdf_path).get("mod_date") or ""),
+        },
     }
 
     chunks: list = []
@@ -176,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--min-tokens", type=int, default=DEFAULT_MIN_TOKENS)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument("--source-url", default="", help="源 PDF 的下载地址(写进 manifest)")
     args = parser.parse_args(argv)
 
     pdf = args.input_opt or args.input_pos
@@ -207,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         context_mode=args.context_mode,
         min_tokens=args.min_tokens,
         max_tokens=args.max_tokens,
+        source_url=args.source_url,
     )
     print(f"pages={manifest['page_count']} output={output_dir}")
     for key in ("enhanced", "baseline"):

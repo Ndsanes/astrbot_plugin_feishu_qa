@@ -70,3 +70,25 @@ def page_texts(pdf_path: str | Path) -> list[str]:
         return [page.get_text("text") for page in doc]
     finally:
         doc.close()
+
+
+def pdf_info(pdf_path: str | Path) -> dict:
+    """PDF 文档级元数据(页数 / 标题 / 创建与修改时间)。
+
+    只读文件头,不做文本提取;用于在 manifest 里记录"这份 PDF 是哪个版本",
+    与 sha256 一起作为更新判定的依据。
+    """
+    import pymupdf
+
+    doc = pymupdf.open(pdf_path)
+    try:
+        meta = doc.metadata or {}
+        return {
+            "page_count": doc.page_count,
+            "title": str(meta.get("title") or ""),
+            "author": str(meta.get("author") or ""),
+            "creation_date": str(meta.get("creationDate") or ""),
+            "mod_date": str(meta.get("modDate") or ""),
+        }
+    finally:
+        doc.close()

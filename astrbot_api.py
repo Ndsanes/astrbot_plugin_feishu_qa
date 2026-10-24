@@ -38,6 +38,13 @@ _RE_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 KEY_TTL_DAYS = 30
 
+# 实例前面挂着 Cloudflare:默认 python-urllib UA 会命中 1010(browser_signature_banned),
+# 表现为整站 403 而看不出是鉴权问题。固定一个浏览器 UA。
+_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+)
+
 
 class ApiKeyExpired(PermissionError):
     pass
@@ -157,7 +164,11 @@ class AstrBotClient:
     def _raw_request(self, method: str, path: str, *, use_jwt: bool = False, **kwargs) -> dict:
         url = f"{self.base_url}{path}"
         token = self._jwt_token if use_jwt else self.api_key
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": _USER_AGENT,
+        }
         headers.update(kwargs.pop("headers", {}))
         data = kwargs.pop("json", None)
         body = json.dumps(data).encode() if data is not None else None
@@ -227,6 +238,7 @@ class AstrBotClient:
             data=body,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": _USER_AGENT,
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
             },
             method="POST",
