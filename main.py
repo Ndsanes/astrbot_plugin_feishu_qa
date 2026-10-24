@@ -136,7 +136,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.14",
+    "0.9.15",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -200,6 +200,7 @@ class FeishuQaPlugin(Star):
 
         self._pending_learn: dict[str, dict] = {}  # user_id -> candidate
         self._sync_task: asyncio.Task | None = None
+        self._register_pages()
 
     def _get_gateway(self):
         """返回 lark_cli 平台适配器的网关对象;未就绪时返回 None(调用方优雅降级)。"""
@@ -1478,6 +1479,135 @@ class FeishuQaPlugin(Star):
             logger.warning("[FeishuQA] 未知 PROACTIVE_MODE=%r,按 off 处理", raw)
             return "off"
         return raw
+
+    # ── 插件可视化页面(WebUI Pages) ──
+
+    def _register_pages(self) -> None:
+        """注册 pages/feishu_qa 的后端接口。
+
+        旧版 AstrBot 没有 ``astrbot.api.web``:直接跳过,不影响插件其余功能。
+        路由必须带插件名前缀,页面端 endpoint 是相对路径(``fuuumusic/sections``)。
+        """
+        context = self.context
+        if context is None:
+            return
+        try:
+            from astrbot.api.web import json_response  # noqa: F401
+        except Exception:
+            logger.warning("[FeishuQA] 当前 AstrBot 不支持插件 Pages,跳过可视化页面")
+            return
+        routes = [
+            (f"/{PLUGIN_NAME}/status", self._page_status, ["GET"], "FeishuQA 状态"),
+            (
+                f"/{PLUGIN_NAME}/fuuumusic/sections",
+                self._page_get_sections,
+                ["GET"],
+                "读取 fuuumusic 章节",
+            ),
+            (
+                f"/{PLUGIN_NAME}/fuuumusic/sections",
+                self._page_save_sections,
+                ["POST"],
+                "保存 fuuumusic 章节",
+            ),
+            (
+                f"/{PLUGIN_NAME}/kb_watch/check",
+                self._page_check_kb_watch,
+                ["POST"],
+                "立即检查官方手册 PDF",
+            ),
+        ]
+        for route, handler, methods, desc in routes:
+            try:
+                context.register_web_api(route, handler, methods, desc)
+            except Exception as exc:
+                logger.warning("[FeishuQA] 页面接口注册失败 %s: %s", route, exc)
+
+    async def _page_status(self):
+        from astrbot.api.web import json_response
+
+        manifest = self.store.load() or {}
+        sources = {
+            key: value.get("kept")
+            for key, value in (manifest.get("sources") or {}).items()
+        }
+        return json_response(
+            {
+                "entries": manifest.get("entry_count", 0),
+                "images": manifest.get("image_count", 0),
+                "revision": manifest.get("revision_id"),
+                "built_at": manifest.get("built_at"),
+                "sources": sources,
+                "fuuumusic_sections": [
+                    str(s) for s in (self._cfg("FUUUMUSIC_SECTIONS", []) or [])
+                ],
+                "proactive_mode": self._proactive_mode,
+                "kb_watch": status_line(self._kb_watch),
+                "kb_watch_checked_at": (self._kb_watch or {}).get("checked_at"),
+                "kb_watch_pending": bool((self._kb_watch or {}).get("pending")),
+            }
+        )
+
+    async def _page_get_sections(self):
+        from astrbot.api.web import error_response, json_response
+
+        selected = [str(s) for s in (self._cfg("FUUUMUSIC_SECTIONS", []) or [])]
+        html = await fetch_url(QA_PAGE_URL)
+        if not html:
+            return error_response(
+                "无法获取 fuuumusic 问答页(网络或站点异常)",
+                data={"selected": selected},
+            )
+        return json_response(
+            {
+                "sections": discover_sections(html),
+                "selected": selected,
+                "source": QA_PAGE_URL,
+            }
+        )
+
+    async def _page_save_sections(self):
+        from astrbot.api.web import error_response, json_response, request
+
+        payload = await request.json(default={})
+        raw = payload.get("sections") if isinstance(payload, dict) else None
+        if not isinstance(raw, list) or not all(isinstance(s, str) for s in raw):
+            return error_response("sections 必须是字符串列表")
+        cleaned: list[str] = []
+        for item in raw:
+            name = item.strip()
+            if not name:
+                continue
+            if len(name) > 100:
+                return error_response("章节名过长(>100 字符)")
+            if name not in cleaned:
+                cleaned.append(name)
+        if len(cleaned) > 50:
+            return error_response("章节过多(>50)")
+        saver = getattr(self.config, "save_config_async", None)
+        try:
+            if saver is not None:
+                await saver({"FUUUMUSIC_SECTIONS": cleaned})
+            self.config["FUUUMUSIC_SECTIONS"] = cleaned
+        except Exception as exc:
+            return error_response(f"保存失败: {exc}")
+        logger.info("[FeishuQA] 页面保存 FUUUMUSIC_SECTIONS=%s", cleaned)
+        return json_response({"saved": True, "sections": cleaned})
+
+    async def _page_check_kb_watch(self):
+        from astrbot.api.web import error_response, json_response
+
+        url = str(self._cfg("KB_WATCH_PDF_URL", OFFICIAL_PDF_URL) or OFFICIAL_PDF_URL)
+        try:
+            result = await asyncio.to_thread(
+                check_once, self._kb_watch_state_path(), url
+            )
+        except Exception as exc:
+            return error_response(f"检查失败: {exc}")
+        self._kb_watch = load_state(self._kb_watch_state_path())
+        return json_response(
+            {"result": result, "status_line": status_line(self._kb_watch)}
+        )
 
 
 

@@ -594,6 +594,126 @@ class TestKbWatchNotify:
         assert "notified_at" not in plugin._kb_watch_state_path().read_text()
 
 
+class TestPageHandlers:
+    """插件可视化页面(pages/feishu_qa)的后端接口。"""
+
+    SECTION_HTML = """<html><body><main>
+<h2>一、Cakewalk Sonar相关问答汇总</h2>
+<h3 class="qa-h3">（一）缺少内容相关</h3>
+<details class="qa-item" id="q1" data-qtitle="【没有自带模板】Cakewalk没有自带的模板怎么办？">
+<summary class="qa-q"><span class="qa-num">1</span>
+<span class="qa-qt"><span class="qa-tag">没有自带模板</span>
+Cakewalk没有自带的模板怎么办？</span></summary>
+<div class="qa-a"><p>A：自己建模板。</p></div></details>
+<h2>二、其他音源相关问答汇总</h2>
+<h3 class="qa-h3">（一）Native Instruments （NI）相关</h3>
+<details class="qa-item" id="q38" data-qtitle="【NI安装失败】NI 一直安装失败怎么办？">
+<summary class="qa-q"><span class="qa-num">9</span>
+<span class="qa-qt"><span class="qa-tag">NI安装失败</span>NI 一直安装失败怎么办？</span></summary>
+<div class="qa-a"><p>A：换下载器。</p></div></details>
+</main></body></html>"""
+
+    def test_status_contains_corpus_and_watch(self, plugin: FeishuQaPlugin) -> None:
+        import asyncio
+
+        data = asyncio.run(plugin._page_status())
+        assert data["entries"] >= 35
+        assert isinstance(data["sources"], dict)
+        assert data["proactive_mode"] in {"off", "shadow", "human_only", "first_ask"}
+        assert "kb_watch" in data
+
+    def test_get_sections_reads_live_page(
+        self, plugin: FeishuQaPlugin, monkeypatch
+    ) -> None:
+        import asyncio
+
+        async def _fake_fetch(url, **kwargs):
+            return self.SECTION_HTML
+
+        monkeypatch.setattr("astrbot_plugin_feishu_qa.main.fetch_url", _fake_fetch)
+        data = asyncio.run(plugin._page_get_sections())
+        assert data["sections"] == [
+            "一、Cakewalk Sonar相关问答汇总",
+            "二、其他音源相关问答汇总",
+        ]
+        assert data["selected"] == []
+
+    def test_get_sections_degrades_on_fetch_failure(
+        self, plugin: FeishuQaPlugin, monkeypatch
+    ) -> None:
+        import asyncio
+
+        async def _fail(url, **kwargs):
+            return None
+
+        monkeypatch.setattr("astrbot_plugin_feishu_qa.main.fetch_url", _fail)
+        data = asyncio.run(plugin._page_get_sections())
+        assert data["status"] == "error"
+        assert data["data"]["selected"] == []
+
+    def test_save_sections_trims_and_dedupes(
+        self, plugin: FeishuQaPlugin, monkeypatch
+    ) -> None:
+        import asyncio
+
+        from astrbot.api.web import request as web_request
+
+        monkeypatch.setitem(
+            web_request.payload,
+            "sections",
+            ["  二、其他音源相关问答汇总  ", "二、其他音源相关问答汇总", "", "   "],
+        )
+        data = asyncio.run(plugin._page_save_sections())
+        assert data["saved"] is True
+        assert plugin.config["FUUUMUSIC_SECTIONS"] == ["二、其他音源相关问答汇总"]
+
+    def test_save_sections_rejects_bad_shape(self, plugin: FeishuQaPlugin, monkeypatch) -> None:
+        import asyncio
+
+        from astrbot.api.web import request as web_request
+
+        monkeypatch.setitem(web_request.payload, "sections", "not-a-list")
+        data = asyncio.run(plugin._page_save_sections())
+        assert data["status"] == "error"
+
+    def test_check_kb_watch_reports_status(
+        self, plugin: FeishuQaPlugin, monkeypatch
+    ) -> None:
+        import asyncio
+
+        monkeypatch.setattr(
+            "astrbot_plugin_feishu_qa.main.check_once",
+            lambda *a, **k: {"status": "up_to_date", "pending": None},
+        )
+        monkeypatch.setattr(
+            "astrbot_plugin_feishu_qa.main.load_state",
+            lambda *a, **k: {
+                "status": "up_to_date",
+                "baseline": {"at": "2026-10-24T00:00:00Z"},
+            },
+        )
+        data = asyncio.run(plugin._page_check_kb_watch())
+        assert "已是最新" in data["status_line"]
+
+    def test_registers_page_routes(self, tmp_path, monkeypatch) -> None:
+        class FakeCtx:
+            def __init__(self):
+                self.routes: list[tuple[str, tuple[str, ...]]] = []
+
+            def register_web_api(self, route, handler, methods, desc):
+                self.routes.append((route, tuple(methods)))
+
+        monkeypatch.setenv("ASTRBOT_DATA_DIR", str(tmp_path))
+        ctx = FakeCtx()
+        FeishuQaPlugin(
+            context=ctx, config={"ENABLED_GROUPS": ["*"], "SYNC_INTERVAL_HOURS": 0}
+        )
+        registered = dict(ctx.routes)
+        assert registered["/astrbot_plugin_feishu_qa/status"] == ("GET",)
+        assert registered["/astrbot_plugin_feishu_qa/fuuumusic/sections"] == ("POST",)
+        assert "/astrbot_plugin_feishu_qa/kb_watch/check" in registered
+
+
 class TestMergedForwardCapability:
     """合并转发能力探测(Phase 4):qq_official 排除,其余放行由构建失败兜底。"""
 

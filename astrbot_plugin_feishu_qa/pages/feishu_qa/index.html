@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FeishuQA 控制台</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <header class="page-header">
+      <div>
+        <h1>FeishuQA 控制台</h1>
+        <p class="muted">飞书语料 / fuuumusic 章节 / 官方手册检查</p>
+      </div>
+      <button id="refresh" class="btn ghost" type="button">刷新</button>
+    </header>
+
+    <main class="grid">
+      <section class="card" id="status-card">
+        <h2>语料概览</h2>
+        <dl id="status-list" class="kv">
+          <div><dt>条目</dt><dd id="st-entries">–</dd></div>
+          <div><dt>图片</dt><dd id="st-images">–</dd></div>
+          <div><dt>来源</dt><dd id="st-sources">–</dd></div>
+          <div><dt>revision</dt><dd id="st-revision">–</dd></div>
+          <div><dt>最后构建</dt><dd id="st-built">–</dd></div>
+          <div><dt>主动答模式</dt><dd id="st-proactive">–</dd></div>
+        </dl>
+      </section>
+
+      <section class="card" id="sections-card">
+        <h2>fuuumusic 导入章节</h2>
+        <p class="muted">
+          留空 = 导入全部条目。章节名会随站点改版变化；过期的白名单会自动退化为不过滤。
+        </p>
+        <div id="sections" class="checks" aria-live="polite"></div>
+        <p id="sections-msg" class="msg" role="status"></p>
+        <div class="actions">
+          <button id="reload-sections" class="btn ghost" type="button">重新读取线上章节</button>
+          <button id="select-all" class="btn ghost" type="button">全选</button>
+          <button id="select-none" class="btn ghost" type="button">清空</button>
+          <button id="save-sections" class="btn primary" type="button">保存</button>
+        </div>
+      </section>
+
+      <section class="card" id="manual-card">
+        <h2>官方手册 PDF</h2>
+        <p id="manual-status">–</p>
+        <p id="manual-meta" class="muted"></p>
+        <div class="actions">
+          <button id="check-manual" class="btn primary" type="button">立即检查</button>
+        </div>
+        <p id="manual-msg" class="msg" role="status"></p>
+        <p class="hint">
+          发现更新后在装了 pymupdf 的环境执行：
+          <code>python tools/knowledge/kb_sync.py --all --kb-name "Cakewalk sonar" --replace</code>
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,5 +1,26 @@
 # 更新日志
 
+## v0.9.15 (2026-10-24)
+
+### 新增
+
+- **插件可视化页面 `pages/feishu_qa`**（需要 AstrBot 的 Plugin Pages，实例
+  4.27.4 已支持）：在 WebUI 插件详情页里直接管理这个插件，而不用再跟
+  `_conf_schema.json` 的类型限制较劲。
+
+  - **fuuumusic 导入章节**：复选框列出站点**实时**的章节名（后端现抓
+    `/cakewalk-sonar-faq/all`），勾选后保存写入 `FUUUMUSIC_SECTIONS`；
+    留空 = 全部导入；已保存但站点上暂时消失的章节也会保留显示，避免误以为
+    被清掉。这正是 2026-10-07 想做成"键值对勾选"却因 schema 只支持固定类型
+    而胎死腹中的配置。
+  - **官方手册**：显示 `/qa_status` 同款状态与上次检查时间，提供"立即检查"。
+  - **语料概览**：条目/图片/来源/revision/最后构建/主动答模式。
+
+  后端接口经 `context.register_web_api` 注册在
+  `/api/plug/<plugin>/status|fuuumusic/sections|kb_watch/check`；页面通过
+  `window.AstrBotPluginPage` bridge 调用。旧版 AstrBot 没有
+  `astrbot.api.web` 时自动跳过注册，不影响插件其余功能。
+
 ## v0.9.14 (2026-10-24)
 
 ### 新增

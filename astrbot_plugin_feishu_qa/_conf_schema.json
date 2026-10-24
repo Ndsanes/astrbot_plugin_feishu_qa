@@ -149,7 +149,7 @@
   "FUUUMUSIC_SECTIONS": {
     "description": "要导入的 fuuumusic 章节(留空 = 全部导入)",
     "type": "list",
-    "hint": "留空 = 导入问答页全部条目(中文问答 + 官方文档中文译文);填入章节名 = 只导入这些章节,例如 三、Cakewalk 官方文档（中文翻译）。官方文档会按全文页导入(聚合页只有摘要)。章节名见站点问答页的一级标题。",
+    "hint": "留空 = 导入问答页全部条目;推荐在插件详情页的「FeishuQA 控制台」里直接勾选(会实时读取站点章节名)。也可以手填章节名,例如 三、Cakewalk 官方文档（中文翻译）。",
     "default": []
   },
   "FUUUMUSIC_SYNC_INTERVAL_HOURS": {

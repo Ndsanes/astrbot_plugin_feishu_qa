@@ -36,6 +36,7 @@ Key flow points an editor must preserve:
 
 ## Key Directories
 
+- `pages/feishu_qa/` + `.astrbot-plugin/i18n/` — 插件可视化页面(WebUI Plugin Pages):实时读取 fuuumusic 章节做复选框、保存 `FUUUMUSIC_SECTIONS`,并显示语料状态/手册检查;后端接口经 `context.register_web_api` 挂在 `/api/plug/astrbot_plugin_feishu_qa/...`(旧版 AstrBot 无 `astrbot.api.web` 时自动跳过)
 - `astrbot_plugin_feishu_qa/main.py` — plugin entry: commands (`/问`, `/qa_status`, `/kb_watch`, `/qa_sync`, `/qa_reload`, `/learn ok|no`), message handlers, tool registration, background sync/auth tasks
 - `astrbot_plugin_feishu_qa/adapter/` — `gateway.py`（`GatewayClient`，对平台网关公开方法的薄封装；resolver 每次调用时解析，天然支持适配器晚启动）
 - `astrbot_plugin_feishu_qa/corpus/` — `model.py` (dataclasses `QaEntry`/`QaImage`, ID derivation), `parser.py` (doc XML → entries), `builder.py` (manifest build/diff/content hash)
@@ -102,7 +103,7 @@ No build step exists; packages run from source.
 ## Testing & QA
 
 - pytest with `asyncio_mode = "auto"` (bare `async def test_*` works, no decorators). 根 `testpaths` 含 `astrbot_lark_kit/tests` 与 `astrbot_plugin_feishu_qa/tests`；bili_verify 是独立仓库（gitignore），测试用 `pytest astrbot_plugin_bili_verify_feishu/tests -q` 显式运行（其 tests/stubs 提供 astrbot 假包）。
-- 当前基线（2026-10-24）：kit 88 + lark_cli_platform 55 + feishu_qa 414 = **557 passed**（根套件）+ bili_verify 54 = 全家桶 611。基线值只增不减，验收标准是"全套 PASS"而非固定数字。
+- 当前基线（2026-10-24）：kit 88 + lark_cli_platform 55 + feishu_qa 430 = **573 passed**（根套件）+ bili_verify 54 = 全家桶 627。基线值只增不减，验收标准是"全套 PASS"而非固定数字。
 - **bili_verify 白名单条目形态（v0.0.7 教训）**：qq_official 条目须为完整 UMO `实例ID:GroupMessage:群openid`（多 bot 轮询按首段定位归属 bot）；`AdmissionsStore.is_whitelisted` 同时接受裸 openid 与 UMO 全串（按末段匹配）。改任何一侧的数据形态时，轮询、校验、审批三条链路必须同步，否则会出现"能拉到申请但被判非白名单"的静默丢弃。
 - When the real `astrbot` package isn't installed, [conftest.py](astrbot_plugin_feishu_qa/tests/conftest.py) prepends `tests/stubs/` containing a minimal fake `astrbot` package (`api.event.AstrMessageEvent`, `api.star.Star`, etc.) so the suite runs offline.
 - Tests use real fixture corpora (`qa_r8268.xml`, revision-tagged) rather than mocks for parser/builder/retrieval paths; `test_main.py` builds a live plugin instance against a `tmp_path` data dir via `monkeypatch.setenv("ASTRBOT_DATA_DIR", ...)`.
