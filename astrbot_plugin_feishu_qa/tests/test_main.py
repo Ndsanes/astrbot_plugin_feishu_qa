@@ -534,6 +534,46 @@ class TestKbWatchNotify:
         assert ok is False
         assert plugin.context.sent == []
 
+    def test_falls_back_to_admin_users(self, plugin: FeishuQaPlugin) -> None:
+        """没配 KB_WATCH_NOTIFY_UMO 时,用 ADMIN_USERS × 平台实例拼私聊 UMO。"""
+        import asyncio
+        from types import SimpleNamespace
+
+        from astrbot_plugin_feishu_qa.kb_watch import save_state
+
+        class _Platform:
+            def __init__(self, pid: str) -> None:
+                self._pid = pid
+
+            def meta(self):
+                return SimpleNamespace(id=self._pid)
+
+        class _Ctx:
+            def __init__(self) -> None:
+                self.platform_manager = SimpleNamespace(
+                    platform_insts=[_Platform("default_1903893532")]
+                )
+                self.sent: list = []
+
+            async def send_message(self, umo, chain):
+                self.sent.append((umo, chain))
+                return True
+
+        state = self._result()
+        save_state(plugin._kb_watch_state_path(), state)
+        plugin.context = _Ctx()
+        plugin.config["KB_WATCH_NOTIFY_UMO"] = ""
+        plugin.config["ADMIN_USERS"] = ["3B0CE753AB1A23307CF28EFDE5ACEC27"]
+        ok = asyncio.run(
+            plugin._kb_watch_notify(
+                {"baseline": state["baseline"], "pending": state["pending"]}
+            )
+        )
+        assert ok is True
+        assert plugin.context.sent[0][0] == (
+            "default_1903893532:FriendMessage:3B0CE753AB1A23307CF28EFDE5ACEC27"
+        )
+
     def test_send_failure_does_not_mark(self, plugin: FeishuQaPlugin) -> None:
         import asyncio
 

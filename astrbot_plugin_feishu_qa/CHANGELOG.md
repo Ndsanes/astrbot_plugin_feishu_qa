@@ -11,8 +11,11 @@
   - 基线只在**重建成功**后推进，避免"检测到了但没同步"被静默吞掉；
   - 插件不引入 pymupdf：重建仍由 `tools/knowledge/kb_sync.py` 在装了依赖的
     环境执行（按章节增量，只重算变化章节）；
-  - 发现更新时通过 `KB_WATCH_NOTIFY_UMO` 给管理员私聊发一条消息（同一更新
-    只发一次；发送失败不标记，下周重试）；`/qa_status` 始终显示待同步状态。
+  - 发现更新时给管理员私聊发一条消息：`KB_WATCH_NOTIFY_UMO` 显式指定优先，
+    留空则用 `ADMIN_USERS × 平台实例` 拼出 `<platform_id>:FriendMessage:<uid>`
+    （与系统提示的 UMO 同形）。同一更新只发一次；发送失败不标记，下周重试。
+  - 新增管理员命令 `/kb_watch`（别名 `/手册检查`）：立即检查并显示状态与通知目标。
+  - `qq_official` 的主动私聊实测可用（`send_by_session` 不需要 msg_id）。
   - 起因：cron 加在开发机上不可靠（Mac 会关机），检查应该跟着 24 小时在线的
     机器人跑。
 

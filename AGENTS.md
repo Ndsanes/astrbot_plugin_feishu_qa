@@ -36,7 +36,7 @@ Key flow points an editor must preserve:
 
 ## Key Directories
 
-- `astrbot_plugin_feishu_qa/main.py` — plugin entry: commands (`/问`, `/qa_status`, `/qa_sync`, `/qa_reload`, `/learn ok|no`), message handlers, tool registration, background sync/auth tasks
+- `astrbot_plugin_feishu_qa/main.py` — plugin entry: commands (`/问`, `/qa_status`, `/kb_watch`, `/qa_sync`, `/qa_reload`, `/learn ok|no`), message handlers, tool registration, background sync/auth tasks
 - `astrbot_plugin_feishu_qa/adapter/` — `gateway.py`（`GatewayClient`，对平台网关公开方法的薄封装；resolver 每次调用时解析，天然支持适配器晚启动）
 - `astrbot_plugin_feishu_qa/corpus/` — `model.py` (dataclasses `QaEntry`/`QaImage`, ID derivation), `parser.py` (doc XML → entries), `builder.py` (manifest build/diff/content hash)
 - `astrbot_plugin_feishu_qa/retrieval/scorer.py` — deterministic `Retriever`, `Confidence` levels

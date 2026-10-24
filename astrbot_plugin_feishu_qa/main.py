@@ -761,14 +761,41 @@ class FeishuQaPlugin(Star):
                 logger.warning("[FeishuQA] 手册 PDF 检查失败(下轮再试): %s", exc)
             await asyncio.sleep(interval)
 
+    def _kb_watch_targets(self) -> list[str]:
+        """通知目标:显式 UMO 优先;否则由 ADMIN_USERS × 平台实例拼私聊 UMO。
+
+        显式配置最稳;拼出来的 UMO 依赖"管理员 openid 与平台实例 id"两段,
+        与系统提示里的 UMO 同形(``<platform_id>:FriendMessage:<uid>``)。
+        """
+        umo = str(self._cfg("KB_WATCH_NOTIFY_UMO", "") or "").strip()
+        if umo:
+            return [umo]
+        admins = [
+            str(a).strip()
+            for a in (self._cfg("ADMIN_USERS", []) or [])
+            if str(a).strip()
+        ]
+        targets: list[str] = []
+        manager = getattr(self.context, "platform_manager", None)
+        for platform in getattr(manager, "platform_insts", []) or []:
+            try:
+                platform_id = str(platform.meta().id)
+            except Exception:
+                continue
+            for uid in admins:
+                target = f"{platform_id}:FriendMessage:{uid}"
+                if target not in targets:
+                    targets.append(target)
+        return targets
+
     async def _kb_watch_notify(self, result: dict) -> bool:
         """把"手册有更新"推给管理员私聊;同一个更新只通知一次。
 
         qq_official 的主动消息在 AstrBot 里走 ``send_by_session``(不需要 msg_id),
         失败只告警,不影响检查本身。
         """
-        umo = str(self._cfg("KB_WATCH_NOTIFY_UMO", "") or "").strip()
-        if not umo or self.context is None:
+        targets = self._kb_watch_targets() if self.context is not None else []
+        if not targets:
             return False
         baseline = result.get("baseline") or {}
         pending = result.get("pending") or {}
@@ -779,21 +806,25 @@ class FeishuQaPlugin(Star):
             "同步: python tools/knowledge/kb_sync.py --all "
             '--kb-name \"Cakewalk sonar\" --replace'
         )
-        try:
-            from astrbot.api.event import MessageChain
+        from astrbot.api.event import MessageChain
 
-            sent = await self.context.send_message(
-                umo, MessageChain().message(text)
-            )
-        except Exception as exc:
-            logger.warning("[FeishuQA] 手册更新通知发送失败(下次再试): %s", exc)
-            return False
-        if not sent:
-            logger.warning("[FeishuQA] 手册更新通知未发送(找不到平台会话): %s", umo)
-            return False
-        self._kb_watch = mark_notified(self._kb_watch_state_path())
-        logger.info("[FeishuQA] 手册更新通知已发送: %s", umo)
-        return True
+        delivered = False
+        for target in targets:
+            try:
+                sent = await self.context.send_message(
+                    target, MessageChain().message(text)
+                )
+            except Exception as exc:
+                logger.warning("[FeishuQA] 手册更新通知发送失败 %s: %s", target, exc)
+                continue
+            if sent:
+                delivered = True
+                logger.info("[FeishuQA] 手册更新通知已发送: %s", target)
+            else:
+                logger.warning("[FeishuQA] 手册更新通知未发送(找不到会话): %s", target)
+        if delivered:
+            self._kb_watch = mark_notified(self._kb_watch_state_path())
+        return delivered
 
     async def _fuuumusic_sync_loop(self) -> None:
         interval = int(self._cfg("FUUUMUSIC_SYNC_INTERVAL_HOURS", 24)) * 3600
@@ -1689,6 +1720,31 @@ class FeishuQaPlugin(Star):
         req.system_prompt = (req.system_prompt or "") + _FAQ_CITATION_GUIDANCE
 
     # ── 管理指令 ──
+
+    @filter.command("kb_watch", alias={"手册检查"})
+    async def kb_watch(self, event: AstrMessageEvent):
+        """[管理] 立即检查 Official Reference Guide PDF 是否有更新。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可用")
+            return
+        url = str(self._cfg("KB_WATCH_PDF_URL", OFFICIAL_PDF_URL) or OFFICIAL_PDF_URL)
+        try:
+            result = await asyncio.to_thread(
+                check_once, self._kb_watch_state_path(), url
+            )
+        except Exception as exc:
+            yield event.plain_result(f"检查失败: {exc}")
+            return
+        self._kb_watch = load_state(self._kb_watch_state_path())
+        lines = [status_line(self._kb_watch)]
+        pending = result.get("pending") or {}
+        if pending:
+            lines.append(
+                f"远端: {pending.get('bytes')} 字节 / {pending.get('last_modified') or '-'}"
+            )
+            targets = self._kb_watch_targets()
+            lines.append("通知目标: " + ("、".join(targets) if targets else "未配置"))
+        yield event.plain_result("\n".join(lines))
 
     @filter.command("qa_status")
     async def qa_status(self, event: AstrMessageEvent):
