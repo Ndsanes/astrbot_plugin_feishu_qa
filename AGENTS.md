@@ -36,7 +36,7 @@ Key flow points an editor must preserve:
 
 ## Key Directories
 
-- `pages/feishu_qa/` + `.astrbot-plugin/i18n/` — 插件可视化页面(WebUI Plugin Pages):**完整设置页**(39 项按场景分组、开关/下拉/标签/数字框,标出需重载项)+ 语料状态 + 手册检查。后端经 `context.register_web_api` 挂 `/api/plug/astrbot_plugin_feishu_qa/{settings,status,fuuumusic/sections,kb_watch/check,reload}`;`POST settings` 只接受 schema 内键、服务端校验类型/范围/枚举、只合并变更键;旧版 AstrBot 无 `astrbot.api.web` 时自动跳过
+- `pages/feishu_qa/` + `.astrbot-plugin/i18n/` — 插件可视化页面(WebUI Plugin Pages):**完整设置页**(37 项按场景分组、开关/下拉/标签/数字框,标出需重载项)+ 语料状态 + 手册检查。后端经 `context.register_web_api` 挂 `/api/plug/astrbot_plugin_feishu_qa/{settings,status,fuuumusic/sections,kb_watch/check,reload}`;`POST settings` 只接受 schema 内键、服务端校验类型/范围/枚举、只合并变更键;旧版 AstrBot 无 `astrbot.api.web` 时自动跳过
 - `astrbot_plugin_feishu_qa/main.py` — plugin entry: commands (`/问`, `/qa_status`, `/kb_watch`, `/qa_sync`, `/qa_reload`, `/learn ok|no`), message handlers, tool registration, background sync/auth tasks
 - `astrbot_plugin_feishu_qa/adapter/` — `gateway.py`（`GatewayClient`，对平台网关公开方法的薄封装；resolver 每次调用时解析，天然支持适配器晚启动）
 - `astrbot_plugin_feishu_qa/corpus/` — `model.py` (dataclasses `QaEntry`/`QaImage`, ID derivation), `parser.py` (doc XML → entries), `builder.py` (manifest build/diff/content hash)
