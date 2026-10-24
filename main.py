@@ -98,6 +98,88 @@ DEFAULT_WIKI_URL = "https://my.feishu.cn/wiki/O9fcwP1PviPuOSkGBekc7B7xn4c"
 # 主动答模式:off 不旁听;shadow 只记不发;human_only 仅在"有人 @ 真人且
 # 无人回应"时兜底;first_ask 群内首问就答。默认 shadow —— 先量一周再开闸。
 _PROACTIVE_MODES = {"off", "shadow", "human_only", "first_ask"}
+
+# 页面保存时的服务端校验(防手抖/防伪造请求)。范围按"人类直觉"给宽一点。
+_SETTING_ENUMS: dict[str, set[str]] = {
+    "PROACTIVE_MODE": _PROACTIVE_MODES,
+    "DECISION_LOG_TEXT_MODE": {"truncate", "hash", "full"},
+}
+_SETTING_LIMITS: dict[str, tuple[float, float]] = {
+    "SYNC_INTERVAL_HOURS": (0, 8760),
+    "MAX_IMAGES": (0, 10),
+    "HIGH_CONFIDENCE_THRESHOLD": (0, 100),
+    "MEDIUM_CONFIDENCE_THRESHOLD": (0, 100),
+    "DECISION_LOG_MAX_TEXT_CHARS": (0, 4000),
+    "DECISION_CACHE_TTL_MINUTES": (0, 10080),
+    "JEV_TIMEOUT_SECONDS": (0.5, 60),
+    "JEV_ANSWERABLE": (0, 1),
+    "JEV_TAKEOVER_PROBABILITY": (0, 1),
+    "JEV_LINK_PROBABILITY": (0, 1),
+    "LEARN_CONTEXT_MESSAGES": (1, 500),
+    "FUUUMUSIC_SYNC_INTERVAL_HOURS": (0, 8760),
+    "PROACTIVE_SETTLE_SECONDS": (0, 120),
+    "PROACTIVE_HUMAN_GRACE_SECONDS": (0, 3600),
+    "PROACTIVE_MAX_PER_DAY": (0, 100),
+    "PROACTIVE_MAX_PER_USER_HOUR": (0, 20),
+    "KB_WATCH_INTERVAL_HOURS": (0, 8760),
+}
+
+
+def _validate_setting(key: str, raw, meta: dict):
+    """按 schema 类型 + 自定义范围校验一个配置值。"""
+    typ = str(meta.get("type") or "")
+    if key in _SETTING_ENUMS:
+        if not isinstance(raw, str) or raw not in _SETTING_ENUMS[key]:
+            raise ValueError(
+                f"{key} 只能是: {', '.join(sorted(_SETTING_ENUMS[key]))}"
+            )
+        return raw
+    if typ == "bool":
+        if not isinstance(raw, bool):
+            raise ValueError(f"{key} 必须是布尔值")
+        return raw
+    if typ in ("int", "float"):
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ValueError(f"{key} 必须是数字")
+        if typ == "int":
+            if float(raw) != int(raw):
+                raise ValueError(f"{key} 必须是整数")
+            value: float | int = int(raw)
+        else:
+            value = float(raw)
+        limits = _SETTING_LIMITS.get(key)
+        if limits and not (limits[0] <= value <= limits[1]):
+            raise ValueError(f"{key} 需在 {limits[0]} ~ {limits[1]} 之间")
+        return value
+    if typ in ("string", "text"):
+        if not isinstance(raw, str):
+            raise ValueError(f"{key} 必须是字符串")
+        text = raw.strip()
+        if len(text) > 2000:
+            raise ValueError(f"{key} 过长(>2000 字符)")
+        return text
+    if typ == "list":
+        if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+            raise ValueError(f"{key} 必须是字符串列表")
+        items: list[str] = []
+        for item in raw:
+            text = item.strip()
+            if not text:
+                continue
+            if len(text) > 200:
+                raise ValueError(f"{key} 里有超过 200 字符的条目")
+            if text not in items:
+                items.append(text)
+        if len(items) > 200:
+            raise ValueError(f"{key} 条目过多(>200)")
+        if key == "FUUUMUSIC_SECTIONS" and len(items) > 50:
+            raise ValueError("FUUUMUSIC_SECTIONS 最多 50 个章节")
+        return items
+    # 没声明类型的键(理论上不会出现)只接受标量
+    if isinstance(raw, (str, int, float, bool)):
+        return raw
+    raise ValueError(f"{key} 的类型不受支持")
+
 # 主动发出的消息必须自己说明身份与理由:用户并没有 @ 机器人。
 _PROACTIVE_GROUP_PREFIX = "【FAQ 自动回复】\n\n"
 _PROACTIVE_HUMAN_PREFIX = "群主可能还没看到,先给你一份参考:\n\n"
@@ -136,7 +218,7 @@ _FAQ_CITATION_GUIDANCE = (
     PLUGIN_NAME,
     "NDsans",
     "飞书 Q&A 文档驱动的领域问答机器人(高置信直答零 LLM)",
-    "0.9.15",
+    "0.9.16",
     "https://github.com/Ndsanes/astrbot_plugin_feishu_qa",
 )
 class FeishuQaPlugin(Star):
@@ -1516,6 +1598,24 @@ class FeishuQaPlugin(Star):
                 ["POST"],
                 "立即检查官方手册 PDF",
             ),
+            (
+                f"/{PLUGIN_NAME}/settings",
+                self._page_get_settings,
+                ["GET"],
+                "读取全部设置",
+            ),
+            (
+                f"/{PLUGIN_NAME}/settings",
+                self._page_save_settings,
+                ["POST"],
+                "保存设置",
+            ),
+            (
+                f"/{PLUGIN_NAME}/reload",
+                self._page_reload,
+                ["POST"],
+                "重载插件",
+            ),
         ]
         for route, handler, methods, desc in routes:
             try:
@@ -1608,6 +1708,130 @@ class FeishuQaPlugin(Star):
         return json_response(
             {"result": result, "status_line": status_line(self._kb_watch)}
         )
+
+    def _conf_schema(self) -> dict:
+        """读取插件 schema(页面用它做类型/默认值/文案的兜底)。"""
+        try:
+            return json.loads(
+                (Path(__file__).resolve().parent / "_conf_schema.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (OSError, ValueError):
+            return {}
+
+    async def _page_get_settings(self):
+        from astrbot.api.web import json_response
+
+        schema = self._conf_schema()
+        values: dict = {}
+        for key, meta in schema.items():
+            value = self._cfg(key, meta.get("default"))
+            if key == "JEV_API_KEY":
+                values[key] = ""
+            else:
+                values[key] = value
+        return json_response(
+            {
+                "values": values,
+                "schema": schema,
+                "has_jev_key": bool(
+                    str(self._cfg("JEV_API_KEY", "") or "").strip()
+                ),
+            }
+        )
+
+    async def _page_save_settings(self):
+        from astrbot.api.web import error_response, json_response, request
+
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("请求体必须是对象")
+        values = payload.get("values") or {}
+        if not isinstance(values, dict):
+            return error_response("values 必须是对象")
+        clear = payload.get("clear_secrets") or []
+        if not isinstance(clear, list) or not all(isinstance(k, str) for k in clear):
+            return error_response("clear_secrets 必须是字符串列表")
+
+        schema = self._conf_schema()
+        unknown = sorted(set(values) - set(schema))
+        if unknown:
+            return error_response(f"未知配置项: {', '.join(unknown)}")
+
+        changes: dict = {}
+        try:
+            unknown_secrets = sorted(set(clear) - set(schema))
+            if unknown_secrets:
+                return error_response(
+                    f"未知配置项: {', '.join(unknown_secrets)}"
+                )
+            for key in clear:
+                changes[key] = ""
+            for key, raw in values.items():
+                if key in clear:
+                    continue
+                if key == "JEV_API_KEY" and (raw is None or str(raw).strip() == ""):
+                    continue  # 留空 = 不修改
+                changes[key] = _validate_setting(key, raw, schema.get(key) or {})
+        except ValueError as exc:
+            return error_response(str(exc))
+
+        if not changes:
+            return json_response(
+                {"saved": True, "changed": [], "reload_required": False}
+            )
+
+        saver_async = getattr(self.config, "save_config_async", None)
+        try:
+            if saver_async is not None:
+                await saver_async(changes)
+            else:
+                saver = getattr(self.config, "save_config", None)
+                if saver is not None:
+                    await asyncio.to_thread(saver, changes)
+            self.config.update(changes)
+        except Exception as exc:
+            return error_response(f"保存失败: {exc}")
+
+        # 这些键在插件加载时被缓存,改完需要重载才生效。
+        dynamic_keys = {"FUUUMUSIC_SECTIONS", "KB_WATCH_NOTIFY_UMO"}
+        reload_required = any(key not in dynamic_keys for key in changes)
+        logger.info(
+            "[FeishuQA] 页面保存设置: %s(reload_required=%s)",
+            sorted(changes),
+            reload_required,
+        )
+        return json_response(
+            {
+                "saved": True,
+                "changed": sorted(changes),
+                "reload_required": reload_required,
+            }
+        )
+
+    async def _page_reload(self):
+        from astrbot.api.web import json_response
+
+        manager = getattr(self.context, "_star_manager", None) if self.context else None
+        if manager is None:
+            return json_response(
+                {"scheduled": False, "message": "无法访问插件管理器,请在 WebUI 手动重载"}
+            )
+        # 先让 HTTP 响应发出去,再重载,避免自己掐断连接。
+        asyncio.create_task(self._reload_self_soon())
+        return json_response({"scheduled": True})
+
+    async def _reload_self_soon(self) -> None:
+        await asyncio.sleep(1.0)
+        manager = getattr(self.context, "_star_manager", None) if self.context else None
+        if manager is None:
+            return
+        try:
+            await manager.reload(PLUGIN_NAME)
+            logger.info("[FeishuQA] 已按页面请求重载插件")
+        except Exception as exc:
+            logger.warning("[FeishuQA] 页面重载插件失败: %s", exc)
 
 
 

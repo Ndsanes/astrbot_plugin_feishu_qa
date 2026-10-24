@@ -695,6 +695,116 @@ Cakewalk没有自带的模板怎么办？</span></summary>
         data = asyncio.run(plugin._page_check_kb_watch())
         assert "已是最新" in data["status_line"]
 
+    def test_get_settings_masks_api_key(self, plugin: FeishuQaPlugin) -> None:
+        import asyncio
+
+        plugin.config["JEV_API_KEY"] = "secret-key"
+        data = asyncio.run(plugin._page_get_settings())
+        assert data["values"]["JEV_API_KEY"] == ""
+        assert data["has_jev_key"] is True
+        assert "PROACTIVE_MODE" in data["values"]
+        assert data["schema"]["MAX_IMAGES"]["type"] == "int"
+
+    def _save(self, plugin: FeishuQaPlugin, payload: dict, monkeypatch) -> dict:
+        import asyncio
+
+        from astrbot.api.web import request as web_request
+
+        monkeypatch.setitem(web_request.payload, "values", payload.get("values", {}))
+        monkeypatch.setitem(
+            web_request.payload, "clear_secrets", payload.get("clear_secrets", [])
+        )
+        return asyncio.run(plugin._page_save_settings())
+
+    def test_save_settings_updates_config(self, plugin: FeishuQaPlugin, monkeypatch) -> None:
+        data = self._save(
+            plugin,
+            {
+                "values": {
+                    "PROACTIVE_MODE": "human_only",
+                    "MAX_IMAGES": 5,
+                    "ENABLED_GROUPS": ["g1", "g1", "  ", "g2"],
+                }
+            },
+            monkeypatch,
+        )
+        assert data["saved"] is True
+        assert plugin.config["PROACTIVE_MODE"] == "human_only"
+        assert plugin.config["MAX_IMAGES"] == 5
+        assert plugin.config["ENABLED_GROUPS"] == ["g1", "g2"]
+        assert data["reload_required"] is True
+
+    def test_save_settings_sections_no_reload(
+        self, plugin: FeishuQaPlugin, monkeypatch
+    ) -> None:
+        data = self._save(
+            plugin,
+            {"values": {"FUUUMUSIC_SECTIONS": ["二、其他音源相关问答汇总"]}},
+            monkeypatch,
+        )
+        assert data["reload_required"] is False
+        assert plugin.config["FUUUMUSIC_SECTIONS"] == ["二、其他音源相关问答汇总"]
+
+    def test_save_rejects_unknown_key(self, plugin: FeishuQaPlugin, monkeypatch) -> None:
+        data = self._save(plugin, {"values": {"NOPE": 1}}, monkeypatch)
+        assert data["status"] == "error"
+        assert "未知配置项" in data["message"]
+
+    def test_save_rejects_bad_types_and_ranges(
+        self, plugin: FeishuQaPlugin, monkeypatch
+    ) -> None:
+        def bad(values: dict) -> str:
+            return self._save(plugin, {"values": values}, monkeypatch)["status"]
+
+        assert bad({"MAX_IMAGES": "3"}) == "error"
+        assert bad({"ATTACH_IMAGES": "yes"}) == "error"
+        assert (
+            self._save(plugin, {"values": {"PROACTIVE_MODE": "nope"}}, monkeypatch)["status"]
+            == "error"
+        )
+        assert self._save(plugin, {"values": {"MAX_IMAGES": 99}}, monkeypatch)["status"] == "error"
+        assert (
+            self._save(plugin, {"values": {"ENABLED_GROUPS": ["a", 1]}}, monkeypatch)["status"]
+            == "error"
+        )
+
+    def test_save_secret_blank_keeps_and_clear_works(
+        self, plugin: FeishuQaPlugin, monkeypatch
+    ) -> None:
+        plugin.config["JEV_API_KEY"] = "old"
+        data = self._save(plugin, {"values": {"JEV_API_KEY": ""}}, monkeypatch)
+        assert data["saved"] is True and data["changed"] == []
+        assert plugin.config["JEV_API_KEY"] == "old"
+
+        data = self._save(
+            plugin, {"clear_secrets": ["JEV_API_KEY"]}, monkeypatch
+        )
+        assert data["saved"] is True
+        assert plugin.config["JEV_API_KEY"] == ""
+
+    def test_reload_schedules_and_calls_manager(
+        self, plugin: FeishuQaPlugin, monkeypatch
+    ) -> None:
+        import asyncio
+        from types import SimpleNamespace
+
+        calls = []
+
+        class Manager:
+            async def reload(self, name):
+                calls.append(name)
+
+        plugin.context = SimpleNamespace(_star_manager=Manager())
+
+        async def _no_sleep(_seconds):
+            return None
+
+        monkeypatch.setattr("asyncio.sleep", _no_sleep)
+        data = asyncio.run(plugin._page_reload())
+        assert data["scheduled"] is True
+        asyncio.run(plugin._reload_self_soon())
+        assert "astrbot_plugin_feishu_qa" in calls
+
     def test_registers_page_routes(self, tmp_path, monkeypatch) -> None:
         class FakeCtx:
             def __init__(self):

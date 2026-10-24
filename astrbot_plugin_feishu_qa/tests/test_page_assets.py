@@ -17,8 +17,10 @@ def test_page_files_and_references() -> None:
     js = (PAGE / "app.js").read_text(encoding="utf-8")
     for endpoint in (
         'apiGet("status")',
+        'apiGet("settings")',
         'apiGet("fuuumusic/sections")',
-        'apiPost("fuuumusic/sections"',
+        'apiPost("settings"',
+        'apiPost("reload"',
         'apiPost("kb_watch/check"',
     ):
         assert endpoint in js, endpoint

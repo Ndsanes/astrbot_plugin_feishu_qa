@@ -11,52 +11,57 @@
     <header class="page-header">
       <div>
         <h1>FeishuQA 控制台</h1>
-        <p class="muted">飞书语料 / fuuumusic 章节 / 官方手册检查</p>
+        <p class="muted">按使用场景整理的全部设置 · 保存后按需重载</p>
       </div>
-      <button id="refresh" class="btn ghost" type="button">刷新</button>
+      <div class="header-actions">
+        <span id="dirty" class="badge hidden">有未保存修改</span>
+        <button id="reset-defaults" class="btn ghost" type="button">恢复默认值</button>
+        <button id="reload-plugin" class="btn ghost" type="button">重载插件</button>
+        <button id="save" class="btn primary" type="button">保存</button>
+      </div>
     </header>
 
-    <main class="grid">
-      <section class="card" id="status-card">
-        <h2>语料概览</h2>
-        <dl id="status-list" class="kv">
-          <div><dt>条目</dt><dd id="st-entries">–</dd></div>
-          <div><dt>图片</dt><dd id="st-images">–</dd></div>
-          <div><dt>来源</dt><dd id="st-sources">–</dd></div>
-          <div><dt>revision</dt><dd id="st-revision">–</dd></div>
-          <div><dt>最后构建</dt><dd id="st-built">–</dd></div>
-          <div><dt>主动答模式</dt><dd id="st-proactive">–</dd></div>
-        </dl>
-      </section>
+    <p id="global-msg" class="msg" role="status"></p>
 
-      <section class="card" id="sections-card">
-        <h2>fuuumusic 导入章节</h2>
-        <p class="muted">
-          留空 = 导入全部条目。章节名会随站点改版变化；过期的白名单会自动退化为不过滤。
-        </p>
-        <div id="sections" class="checks" aria-live="polite"></div>
-        <p id="sections-msg" class="msg" role="status"></p>
-        <div class="actions">
-          <button id="reload-sections" class="btn ghost" type="button">重新读取线上章节</button>
-          <button id="select-all" class="btn ghost" type="button">全选</button>
-          <button id="select-none" class="btn ghost" type="button">清空</button>
-          <button id="save-sections" class="btn primary" type="button">保存</button>
-        </div>
-      </section>
+    <div class="layout">
+      <nav id="toc" class="toc" aria-label="设置分组"></nav>
 
-      <section class="card" id="manual-card">
-        <h2>官方手册 PDF</h2>
-        <p id="manual-status">–</p>
-        <p id="manual-meta" class="muted"></p>
-        <div class="actions">
-          <button id="check-manual" class="btn primary" type="button">立即检查</button>
-        </div>
-        <p id="manual-msg" class="msg" role="status"></p>
-        <p class="hint">
-          发现更新后在装了 pymupdf 的环境执行：
-          <code>python tools/knowledge/kb_sync.py --all --kb-name "Cakewalk sonar" --replace</code>
-        </p>
-      </section>
-    </main>
+      <main id="form" class="form"></main>
+
+      <aside class="side">
+        <section class="card">
+          <h2>运行状态</h2>
+          <dl class="kv">
+            <div><dt>语料条目</dt><dd id="st-entries">–</dd></div>
+            <div><dt>图片</dt><dd id="st-images">–</dd></div>
+            <div><dt>来源</dt><dd id="st-sources">–</dd></div>
+            <div><dt>revision</dt><dd id="st-revision">–</dd></div>
+            <div><dt>最后构建</dt><dd id="st-built">–</dd></div>
+          </dl>
+        </section>
+
+        <section class="card">
+          <h2>官方手册 PDF</h2>
+          <p id="manual-status">–</p>
+          <p id="manual-meta" class="muted"></p>
+          <div class="actions">
+            <button id="check-manual" class="btn primary" type="button">立即检查</button>
+          </div>
+          <p id="manual-msg" class="msg" role="status"></p>
+          <p class="hint">
+            有更新时在装了 pymupdf 的环境执行
+            <code>kb_sync.py --all --kb-name "Cakewalk sonar" --replace</code>
+          </p>
+        </section>
+      </aside>
+    </div>
+
+    <footer class="save-bar">
+      <span id="save-state">所有修改已保存</span>
+      <div class="actions">
+        <button id="save-bottom" class="btn primary" type="button">保存</button>
+        <button id="save-reload" class="btn ghost" type="button">保存并重载</button>
+      </div>
+    </footer>
   </body>
 </html>
